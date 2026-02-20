@@ -1,8 +1,15 @@
 """
 Baseline Trading Strategies for Double Auction ABM
-Usage:
-    trader = Trader(uaid=1, cash=5000.0, shares=50.0, info_param=0.1, trader_type="signal_following")
-    order = trader.place_order(signal=1.08, value=100.0)
+This module defines several trading strategies and a Trader class that can use them.
+
+The strategies include:
+- zero_intelligence: random orders ignoring the signal
+- signal_following: uses the signal to set price and quantity
+- mixed: randomly chooses between strategies based on provided probabilities
+
+Example usage:
+trader = Trader(uaid=1, cash=5000.0, shares=50.0, info_param=0.1, trader_type="signal_following")
+order = trader.place_order(signal=1.08, value=100.0)
 """
 
 import random
@@ -40,6 +47,7 @@ class NoiseTrader:
         Returns:
             dict with keys: Price, Quantity, Buy, Sell, Hold, ID
         """
+        # Check what actions are possible given budget and holdings
         can_buy = self.cash > 0 and value > 0
         can_sell = self.shares > 0
 
@@ -56,6 +64,7 @@ class NoiseTrader:
             action = "sell"
 
         # Random price within range
+        # We ensure the price is at least 0.01 to avoid zero or negative prices, which would be invalid.
         low = value * (1 - price_range)
         high = value * (1 + price_range)
         price = round(random.uniform(max(low, 0.01), high), 2)
@@ -148,6 +157,7 @@ def signal_following(signal: float, cash: float, shares: float, value: float, ag
     Returns:
         dict with Price, Quantity, Buy, Sell, Hold
     """
+    # Determine direction based on signal
     if signal > 1.0:
         action = "buy"
     else:
@@ -205,16 +215,22 @@ class Trader:
         Strategy Probabilities - array of weights for mixed strategies
         Trader Type           - "zi", "signal_following", "mixed", etc.
     """
-
+    # The Trader class is designed to be flexible and can represent different types of traders based on the trader_type parameter.
+    # The place_order method looks up the appropriate strategy function based on the trader_type and calls
+    # it with the current signal, cash, shares, and value to generate an order.
     def __init__(self,uaid: int,cash: float,shares: float,info_param: float = 0.1,strategy_probs: list = None,trader_type: str = "zi",):
         
-        self.uaid = uaid
-        self.cash = cash
-        self.shares = shares
+        self.uaid = uaid # unique agent ID
+        self.cash = cash # available cash
+        self.shares = shares # number of shares held
         self.info_param = info_param  # sigma_noise — lower = more precise
-        self.strategy_probs = strategy_probs or [1.0]
-        self.trader_type = trader_type
+        self.strategy_probs = strategy_probs or [1.0] # default to 100% weight on the specified strategy if not provided
+        self.trader_type = trader_type # "zi", "signal_following", "mixed", etc.
 
+    # The place_order method checks the trader_type. If it's "mixed", it randomly selects a strategy based on the provided probabilities.
+    # Otherwise, it looks up the strategy function directly from the STRATEGIES dictionary. 
+    # It then calls the chosen strategy function with the current signal, cash, shares, and 
+    # value to generate an order dict, which it returns with the trader's UAID included.
     def place_order(self, signal: float, value: float) -> dict:
         """Generate an order using the trader's assigned strategy.
 
@@ -225,6 +241,7 @@ class Trader:
         Returns:
             dict with Price, Quantity, Buy, Sell, Hold, ID
         """
+        # For a "mixed" trader, we randomly select a strategy based on the provided probabilities.
         if self.trader_type == "mixed":
             # Pick a strategy randomly based on probability weights
             strategy_names = list(STRATEGIES.keys())
@@ -233,12 +250,16 @@ class Trader:
         else:
             strategy_fn = STRATEGIES.get(self.trader_type, zero_intelligence)
 
+        # Call the chosen strategy function to generate the order
         order = strategy_fn(signal, self.cash, self.shares, value)
         order["ID"] = self.uaid
         return order
 
 # VALIDATION HELPER
 
+# The validate_order function checks that an order dict respects budget and shorting constraints.
+# It ensures that the price is positive, the quantity is at least 1, and that
+# the order does not exceed the trader's cash for buys or shares for sells.
 def validate_order(order: dict, cash: float, shares: float) -> bool:
     """Check that an order dict respects budget and shorting constraints."""
     if order["Hold"] == 1.0:
@@ -253,6 +274,12 @@ def validate_order(order: dict, cash: float, shares: float) -> bool:
 
 # TESTS
 
+# The run_tests function runs a series of assertions to verify that the strategy functions and
+# Trader class behave as expected under various conditions.
+# It tests the zero_intelligence strategy for valid orders and price ranges, 
+# checks that a broke agent can only sell, and that an empty agent holds.
+# It also tests the signal_following strategy for correct buy/sell behavior based on bullish/bearish signals,
+# and that stronger signals lead to larger positions. Finally, it tests the Trader class for correct order generation and UAID assignment.
 def run_tests():
     print("Running tests...\n")
 

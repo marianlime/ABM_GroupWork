@@ -25,7 +25,9 @@ current_price = 100.0
 signal_t1 = 1.08  # t1 thinks price goes up 8%
 signal_t2 = 0.97  # t2 gets a signal too, but ZI ignores it
 
-# Step 4: Each trader generates an order based on their strategy and the current state.
+# Step 4: 
+
+# Each trader generates an order based on their strategy and the current state.
 # Note: the actual order dict structure and validation would depend on the implementation of place_order and
 # the expected format for Ahmed's String mechanism.
 order1 = t1.place_order(signal=signal_t1, value=current_price)
@@ -44,8 +46,11 @@ print("Noise Trader:")
 print(order3)
 print()
 
-# Step 5: Collect all orders into the list that Person 2's clearing mechanism expects
-# The expected format for the clearing mechanism is a list of dicts with keys: "ID", "Buy", "Sell", "Hold", "Quantity", "Price".
+# Step 5: 
+
+# Collect all orders into the list that Person 2's clearing mechanism expects
+# The expected format for the clearing mechanism is a list of dicts.
+# Keys: "ID", "Buy", "Sell", "Hold", "Quantity", "Price".
 all_orders = [order1, order2, order3]
 
 print("All orders for clearing mechanism:")
