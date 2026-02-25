@@ -64,7 +64,7 @@ def clear_market(orders, previous_price=None):
     # Allocate trades using pro-rata rationing
     trades = allocate_trades(buys, sells, best_price, best_volume)
 
-    return best_price, trades
+    return best_price, total_volume,trades
 
 
 def allocate_trades(buys, sells, price, total_volume):

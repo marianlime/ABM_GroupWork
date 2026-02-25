@@ -5,6 +5,24 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import matplotlib.patches as patches
 
+
+def assign_noise_parameter_set(num_agents, dist_type="bimodal"):
+    if dist_type == "uniform":
+        return np.random.uniform(0.1, 0.5, num_agents)
+    elif dist_type == "bimodal":
+        group_a = np.random.normal(0.1, 0.05, num_agents // 2)
+        group_b = np.random.normal(0.9, 0.05, num_agents // 2)
+        return np.clip(np.concatenate([group_a, group_b]), 0.01, 1.5)
+    elif dist_type == "skewed":
+        return np.random.lognormal(-1, 0.5, num_agents)
+
+def signal_generator(noise_parameter, S_next, noise_distribution='lognormal'):
+    if noise_distribution='lognormal':
+        return S_next * np.exp(np.random.normal(0, noise_parameter))
+    if noise_distribution='uniform':
+        return 0
+
+
 class DSPVennSignal(QMainWindow):
     def __init__(self):
         super().__init__()

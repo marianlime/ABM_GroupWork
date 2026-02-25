@@ -1,3 +1,7 @@
+from Second_Draft_Trading_Strategies.py import *
+from signal_gen import *
+from order_book.py import *
+
 """ To do:
 Parameters:
 - Number of signal following agents: n_strategic_agents
@@ -86,39 +90,71 @@ S0 = 100
 volatility = 0.02
 drift = 0
 total_initial_shares = 100
-cash_to_share_ratio = 100
+cash_to_share_ratio = 1
 distribution_of_players = 'normal'
 distribution_of_noise = 'uniform'
 run_id = 1
 
 
 class game:
-    def __init__(self, n_strategic_agents, n_zi_agents, n_rounds, S0, volatility, drift, initial_quantity, initial_cash, run_id):
+    def __init__(self, n_strategic_agents, n_zi_agents, n_rounds, S0, volatility, drift, total_initial_shares, cash_to_share_ratio, run_id):
         self.current_round = 0
         self.players = {}
         self.sigma = sigma
         self.n_strategic_agents = n_strategic_agents
+        self.n_zi_agents = n_zi_agents
+        self.n_players = n_strategic_agents + n_zi_agents
+        self.S0 = S0
+        self.volatility = volatility
+        self.drift = drift
+        self.total_initial_shares = total_initial_shares
+        self.initial_cash = total_initial_shares * total_initial_shares * cash_to_share_ratio
+        self.run_id = run_id
         
 
         # Order history: tuple {current_round : {buy_orders, sell_orders}}
         self.order_history = {}
         self.price_history = {}
+        self.noise_parameter_set = assign_noise_parameter_set(n_agents, dist_type="bimodal")
 
-        # Creates N lots of informed traders, with decreasing information on next price as index increases
-        for i in range(M_n_players):
-            self.players[i] = trader(
-                identity=i, 
-                information=i * sigma / N_i_players, 
-                starting_cash=starting_cash, 
-                starting_quantity=starting_quantity)
+        # Creates N lots of informed traders
+        for i in range(n_strategic_agents):
+            self.players[i] = Trader(
+              uaid = i, 
+              cash = self.total_initial_cash / (self.n_players), 
+              shares = self.total_initial_shares / self.n_players, 
+              noise_parameter = noise_parameter_set[i],
+              strategy_probs = None, 
+              trader_type: str = "signal_following")
 
-        # Creates M noise traders
-        for i in range(M_n_players):
-            self.players[i + N_i_players] = trader(i + N_i_players, 
-                                                   -1, 
-                                                   starting_quantity, 
-                                                   starting_cash)
-        self.stock_path = simulate_gbm(S_0, sigma, M_rounds)
+        # Creates noise traders
+        for i in range(n_zi_agents):
+            self.players[i] = Trader(
+              uaid = i, 
+              cash = self.total_initial_cash / self.n_players, 
+              shares = self.total_initial_shares / self.n_players, 
+              noise_parameter = None,
+              strategy_probs = None, 
+                trader_type: str = "zi")
+        
+        def gather_orders(self, current_round):
+          order_list = []
+        #Iterating through dict of players
+          for player_id, player in self.players.items():
+              order_list.append(player.place_order(
+                signal = signal_generator(player.noise_parameter, 
+                S_next= self.stock_path[current_round + 1], noise_distribution='lognormal'), 
+                value = self.stock_path[current_round]))
+
+        best_price, total_volume, trades = clear_market(order_list)
+
+        
+
+              
+
+
+      
+      
 
 
 
