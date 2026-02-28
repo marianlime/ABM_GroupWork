@@ -1,5 +1,5 @@
 """
-Baseline Trading Strategies for Double Auction ABM
+Baseline Trading Strategies for Double Auction 
 This module defines several trading strategies and a Trader class that can use them.
 
 The strategies include:
@@ -10,75 +10,16 @@ The strategies include:
 Example usage:
 trader = Trader(uaid=1, cash=5000.0, shares=50.0, info_param=0.1, trader_type="signal_following")
 order = trader.place_order(signal=1.08, value=100.0)
+
+Signal = predicted_value(t+1) / current_value(t)
+e.g. signal=1.08 means agent predicts price rises 8%
+
 """
 
 import random
 import math
 
-# NOISE TRADER CLASS
 
-class NoiseTrader:
-    """A noise trader with no information — trades randomly within budget.
-        UAID   - unique agent ID (int)
-        Cash   - available cash (float)
-        Shares - number of shares held (float)
-    """
-
-    # We initialize the NoiseTrader with its unique ID, cash, and shares. 
-    # The place_order method generates a random order based on the current stock price (value) and 
-    # ensures that it respects the trader's budget constraints.
-    # The price of the order is randomly chosen within a specified range around the current value, and 
-    # the quantity is determined by how much the trader can afford to buy or sell.
-    def __init__(self, uaid: int, cash: float, shares: float):
-        self.uaid = uaid
-        self.cash = cash
-        self.shares = shares
-
-    # we can reuse the same logic as the zero_intelligence strategy function, 
-    # but we put it in a method here for direct use by NoiseTrader instances. 
-    # This keeps the NoiseTrader class self-contained and allows us to easily adjust parameters like price range if needed.
-    def place_order(self, value: float, price_range: float = 0.2) -> dict: # Added price_range parameter for flexibility 
-        """Generate a random order within budget constraints.
-
-        Arguments:
-            value: current underlying stock price (S_t)
-            price_range: how far above/below value the price can be (default +/-20%)
-
-        Returns:
-            dict with keys: Price, Quantity, Buy, Sell, Hold, ID
-        """
-        # Check what actions are possible given budget and holdings
-        can_buy = self.cash > 0 and value > 0
-        can_sell = self.shares > 0
-
-        # If agent can't trade at all, hold
-        if not can_buy and not can_sell:
-            return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0, "ID": self.uaid}
-
-        # Random direction from feasible options
-        if can_buy and can_sell:
-            action = random.choice(["buy", "sell"])
-        elif can_buy:
-            action = "buy"
-        else:
-            action = "sell"
-
-        # Random price within range
-        # We ensure the price is at least 0.01 to avoid zero or negative prices, which would be invalid.
-        low = value * (1 - price_range)
-        high = value * (1 + price_range)
-        price = round(random.uniform(max(low, 0.01), high), 2)
-
-        # Random quantity within budget
-        if action == "buy":
-            max_qty = self.cash / price if price > 0 else 0
-            if max_qty < 1:
-                return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0, "ID": self.uaid}
-            quantity = round(random.uniform(1, max_qty), 2)
-        else:
-            quantity = round(random.uniform(1, self.shares), 2) if self.shares >= 1 else self.shares
-
-        return {"Price": price, "Quantity": quantity, "Buy": 1.0 if action == "buy" else 0.0, "Sell": 1.0 if action == "sell" else 0.0, "Hold": 0.0, "ID": self.uaid}
 
 
 # STRATEGY FUNCTIONS
@@ -143,6 +84,11 @@ def zero_intelligence(signal: float, cash: float, shares: float, value: float) -
 def signal_following(signal: float, cash: float, shares: float, value: float, aggression: float = 1.0) -> dict:
     """Signal-Following strategy: uses private signal to set price and quantity.
 
+    Signal Definition 
+    
+    Signal = predicted_value(t+1) / current_value(t)
+    e.g. signal=1.08 means agent predicts price rises 8%
+
     Direction: signal > 1.0 -> buy (expects price rise), otherwise -> sell
     Price:     value x signal (estimate of future worth)
     Quantity:  scaled by conviction (how far signal is from 1.0)
@@ -191,6 +137,7 @@ def signal_following(signal: float, cash: float, shares: float, value: float, ag
     if quantity < 1:
         return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
 
+    #
     return {"Price": price, "Quantity": quantity, "Buy": 1.0 if action == "buy" else 0.0, "Sell": 1.0 if action == "sell" else 0.0, "Hold": 0.0,}
 
 
@@ -279,11 +226,12 @@ def validate_order(order: dict, cash: float, shares: float) -> bool:
 # It tests the zero_intelligence strategy for valid orders and price ranges, 
 # checks that a broke agent can only sell, and that an empty agent holds.
 # It also tests the signal_following strategy for correct buy/sell behavior based on bullish/bearish signals,
-# and that stronger signals lead to larger positions. Finally, it tests the Trader class for correct order generation and UAID assignment.
+# and that stronger signals lead to larger positions. Finally, it tests the Trader class for correct
+# order generation and UAID assignment.
 def run_tests():
     print("Running tests...\n")
 
-    # --- Test ZI strategy function ---
+    # Test ZI strategy function
     for i in range(100):
         order = zero_intelligence(signal=1.0, cash=10000.0, shares=100.0, value=100.0)
         assert validate_order(order, 10000.0, 100.0), f"ZI invalid order on iteration {i}: {order}"
@@ -291,7 +239,7 @@ def run_tests():
             assert 80.0 <= order["Price"] <= 120.0, f"ZI price out of range: {order['Price']}"
     print("  ✓ ZI: 100 orders all valid and within price range")
 
-    # --- Test ZI with no cash (can only sell) ---
+    # Test ZI with no cash (can only sell)
     for _ in range(50):
         order = zero_intelligence(signal=1.0, cash=0.0, shares=10.0, value=100.0)
         if order["Hold"] != 1.0:
@@ -299,49 +247,41 @@ def run_tests():
             assert order["Quantity"] <= 10.0
     print("  ✓ ZI: broke agent only sells, respects share limit")
 
-    # --- Test ZI with nothing ---
+    # Test ZI with nothing
     order = zero_intelligence(signal=1.0, cash=0.0, shares=0.0, value=100.0)
     assert order["Hold"] == 1.0, "Empty agent should hold"
     print("  ✓ ZI: empty agent holds")
 
-    # --- Test SF: bullish signal -> buy ---
+    # Test SF: bullish signal -> buy
     order = signal_following(signal=1.10, cash=10000.0, shares=100.0, value=100.0)
     assert order["Buy"] == 1.0, f"Bullish signal should buy, got {order}"
     assert abs(order["Price"] - 110.0) < 0.01, f"Price should be ~110, got {order['Price']}"
     assert validate_order(order, 10000.0, 100.0)
     print("  ✓ SF: bullish signal → buy at ~110")
 
-    # --- Test SF: bearish signal -> sell ---
+    # Test SF: bearish signal -> sell
     order = signal_following(signal=0.90, cash=10000.0, shares=100.0, value=100.0)
     assert order["Sell"] == 1.0, f"Bearish signal should sell, got {order}"
     assert abs(order["Price"] - 90.0) < 0.01, f"Price should be ~90, got {order['Price']}"
     print("  ✓ SF: bearish signal → sell at ~90")
 
-    # --- Test SF: strong signal -> bigger position ---
+    # Test SF: strong signal -> bigger position 
     order_strong = signal_following(signal=1.15, cash=10000.0, shares=100.0, value=100.0)
     order_weak = signal_following(signal=1.02, cash=10000.0, shares=100.0, value=100.0)
     assert order_strong["Quantity"] > order_weak["Quantity"], \
         f"Strong signal should give bigger qty ({order_strong['Quantity']}) than weak ({order_weak['Quantity']})"
     print("  ✓ SF: strong signal → larger position than weak signal")
 
-    # --- Test Trader class ---
+    # Test Trader class
     trader = Trader(uaid=1, cash=5000.0, shares=50.0, trader_type="signal_following")
     order = trader.place_order(signal=1.08, value=100.0)
     assert order["ID"] == 1, "Order should carry trader's UAID"
     assert order["Buy"] == 1.0, "Bullish signal should produce buy"
     assert validate_order(order, 5000.0, 50.0)
     print("  ✓ Trader: SF trader produces valid buy order with correct UAID")
-
-    # --- Test Noise Trader class ---
-    nt = NoiseTrader(uaid=99, cash=3000.0, shares=30.0)
-    order = nt.place_order(value=100.0)
-    assert order["ID"] == 99
-    assert validate_order(order, 3000.0, 30.0)
-    print("  ✓ NoiseTrader: produces valid order with correct UAID")
-
-    # --- Test mixed trader ---
-    mixed = Trader(uaid=2, cash=5000.0, shares=50.0, trader_type="mixed",
-                   strategy_probs=[0.5, 0.5])
+    
+    # Test mixed trader
+    mixed = Trader(uaid=2, cash=5000.0, shares=50.0, trader_type="mixed", strategy_probs=[0.5, 0.5])
     for _ in range(50):
         order = mixed.place_order(signal=1.05, value=100.0)
         assert validate_order(order, 5000.0, 50.0)

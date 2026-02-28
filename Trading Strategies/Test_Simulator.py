@@ -1,4 +1,4 @@
-from Second_Draft_Trading_Strategies import Trader, NoiseTrader, zero_intelligence, signal_following
+from Trading_Strategies import Trader, zero_intelligence, signal_following
 
 # Step 1: Creates traders
 
@@ -8,8 +8,8 @@ t1 = Trader(uaid=1, cash=5000.0, shares=50.0, info_param=0.05, trader_type="sign
 # A zero-intelligence trader
 t2 = Trader(uaid=2, cash=5000.0, shares=50.0, trader_type="zi")
 
-# A noise trader (separate class, no signal needed)
-t3 = NoiseTrader(uaid=3, cash=5000.0, shares=50.0)
+# Mark 2 zero-intelligence trade
+t3 = Trader(uaid=3, cash=5000.0, shares=50.0, trader_type="zi")
 
 # Step 2:
 
@@ -24,6 +24,7 @@ current_price = 100.0
 # For now, these are just mocked them:
 signal_t1 = 1.08  # t1 thinks price goes up 8%
 signal_t2 = 0.97  # t2 gets a signal too, but ZI ignores it
+signal_t3 = 1.02  # t3 ignores signal too
 
 # Step 4: 
 
@@ -32,7 +33,7 @@ signal_t2 = 0.97  # t2 gets a signal too, but ZI ignores it
 # the expected format for Ahmed's String mechanism.
 order1 = t1.place_order(signal=signal_t1, value=current_price)
 order2 = t2.place_order(signal=signal_t2, value=current_price)
-order3 = t3.place_order(value=current_price)
+order3 = t3.place_order(signal=signal_t3, value=current_price)
 
 print("Signal-Following Trader:")
 print(order1)
@@ -42,7 +43,7 @@ print("Zero-Intelligence Trader:")
 print(order2)
 print()
 
-print("Noise Trader:")
+print("ZI_Trader:")
 print(order3)
 print()
 
@@ -55,5 +56,4 @@ all_orders = [order1, order2, order3]
 
 print("All orders for clearing mechanism:")
 for order in all_orders:
-    print(f"  Trader {order['ID']}: {'BUY' if order['Buy'] == 1.0 else 'SELL' if order['Sell'] == 1.0 else 'HOLD'} "
-          f"{order['Quantity']} shares @ {order['Price']}")
+    print(f"  Trader {order['ID']}: {'BUY' if order['Buy'] == 1.0 else 'SELL' if order['Sell'] == 1.0 else 'HOLD'} "f"{order['Quantity']} shares @ {order['Price']}")
