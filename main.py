@@ -7,7 +7,7 @@ from analysis import analyse_game_results
 
 n_strategic_agents = 50
 n_zi_agents = 100
-n_rounds = 1000
+n_rounds = 10
 S0 = 100
 volatility = 0.1
 drift = 0
