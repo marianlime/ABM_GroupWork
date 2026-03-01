@@ -16,10 +16,11 @@ def assign_noise_parameter_set(num_agents, dist_type="uniform"):
     elif dist_type == "skewed":
         return np.random.lognormal(-1, 0.5, num_agents)
 
-def signal_generator(noise_parameter, S_next, noise_distribution='lognormal'):
+def signal_generator(noise_parameter, S_next, bias = 0.0, noise_distribution='lognormal'):
     if noise_distribution == 'lognormal':
         # multiplicative lognormal noise
-        return S_next * np.exp(np.random.normal(0, noise_parameter))
+        # adding a bias factor into the noise as it can replicate real world market "average" belief(bullish or bearish)
+        return S_next * np.exp(np.random.normal(bias, noise_parameter))
 
     if noise_distribution == 'uniform':
         # multiplicative uniform noise around 1: U(1-σ, 1+σ)
