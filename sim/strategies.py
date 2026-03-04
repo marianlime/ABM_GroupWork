@@ -300,8 +300,8 @@ def adapted_signal_following(signal: float, cash: float, shares: float, value: f
         return None
 
     return {"Price": price, "Quantity": quantity,
-            "Buy": 1.0 if side == "buy" else 0.0,
-            "Sell": 1.0 if side == "sell" else 0.0,
+            "Buy": 1.0 if action == "buy" else 0.0,
+            "Sell": 1.0 if action == "sell" else 0.0,
             "Hold": 0.0}
 
 STRATEGIES = {
