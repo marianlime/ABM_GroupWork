@@ -5,3 +5,5 @@ __pycache__/
 .ipynb_checkpoints/
 .env
 /.venv_linux
+/.vscode
+/Tests/.pytest_cache
