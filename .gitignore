@@ -7,3 +7,4 @@ __pycache__/
 /.venv_linux
 /.vscode
 /Tests/.pytest_cache
+/.pytest_cache
