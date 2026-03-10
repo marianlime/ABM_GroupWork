@@ -31,7 +31,7 @@ def clear_market(orders, previous_price=None):
     Parameters
     ----------
     orders : list of dict
-        Each dict must contain 'agent_id', 'price', 'quantity', and 'side'
+        Each dict must contain 'agent_id', 'price', 'quantity', and 'action'
         ('buy' or 'sell').
     previous_price : float, optional
         Last known clearing price used to break ties (price-continuity rule).
@@ -43,10 +43,10 @@ def clear_market(orders, previous_price=None):
     best_volume : float
         Total volume traded at the clearing price.
     trades : list of dict
-        One entry per filled order, each with 'agent_id', 'quantity', 'price', 'side'.
+        One entry per filled order, each with 'agent_id', 'quantity', 'price', 'action'.
     """
-    buys  = [o for o in orders if o['side'] == 'buy']
-    sells = [o for o in orders if o['side'] == 'sell']
+    buys  = [o for o in orders if o['action'] == 'buy']
+    sells = [o for o in orders if o['action'] == 'sell']
 
     if not buys or not sells:
         return None, 0, []
@@ -122,7 +122,7 @@ def allocate_trades(buys, sells, price, total_volume):
                 'agent_id': order['agent_id'],
                 'quantity': float(fill),
                 'price':    float(price),
-                'side':     'buy'
+                'action':     'buy'
             })
 
     for order in eligible_sells:
@@ -133,19 +133,19 @@ def allocate_trades(buys, sells, price, total_volume):
                 'agent_id': order['agent_id'],
                 'quantity': float(fill),
                 'price':    float(price),
-                'side':     'sell'
+                'action':     'sell'
             })
 
     return trades
 
 
-# ── Example usage ────────────────────────────────────────────────────────────
+# ── Example usage ───────────────────────────-────────────────────────────────
 if __name__ == "__main__":
     orders = [
-        {'agent_id': 1, 'price': 100, 'quantity': 10, 'side': 'buy'},
-        {'agent_id': 2, 'price':  99, 'quantity': 15, 'side': 'buy'},
-        {'agent_id': 3, 'price': 101, 'quantity':  8, 'side': 'sell'},
-        {'agent_id': 4, 'price': 100, 'quantity': 12, 'side': 'sell'},
+        {'agent_id': 1, 'price': 100, 'quantity': 10, 'action': 'buy'},
+        {'agent_id': 2, 'price':  99, 'quantity': 15, 'action': 'buy'},
+        {'agent_id': 3, 'price': 101, 'quantity':  8, 'action': 'sell'},
+        {'agent_id': 4, 'price': 100, 'quantity': 12, 'action': 'sell'},
     ]
 
     price, volume, trades = clear_market(orders, previous_price=99.5)
@@ -154,4 +154,4 @@ if __name__ == "__main__":
     print(f"Total Volume:   {volume}")
     print(f"\nTrades:")
     for t in trades:
-        print(f"  Agent {t['agent_id']}: {t['side'].upper()} {t['quantity']} shares @ {t['price']}")
+        print(f"  Agent {t['agent_id']}: {t['action'].upper()} {t['quantity']} shares @ {t['price']}")
