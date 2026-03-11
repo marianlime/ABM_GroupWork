@@ -7,7 +7,7 @@ def analyse_game_results(g, final_score, n_strategic_agents=None, title_prefix="
     Post-run diagnostics for the game.
 
     Inputs:
-      g            : game instance (must have agents, stock_path, price_history/order_history)
+      g            : game instance (must have agents, fundamental_path, price_history/order_history)
       final_score  : list of tuples (agent_id, final_wealth)
       n_strategic_agents: optional int, if you want to label types by id cutoff
       title_prefix : optional str for plot titles
@@ -73,7 +73,7 @@ def analyse_game_results(g, final_score, n_strategic_agents=None, title_prefix="
         print("\n(No sufficient informed/info_param data to analyze info effects.)")
 
     # ----- Time-series: fundamental vs clearing price -----
-    fundamental = np.array(g.stock_path, dtype=float)
+    fundamental = np.array(g.fundamental_path, dtype=float)
 
     n_rounds = len(fundamental) - 1
     clearing = []

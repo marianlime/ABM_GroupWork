@@ -119,7 +119,7 @@ def utility_maximiser(signal: float, cash: float, shares: float, value: float,
     trade a quantity proportional to their edge divided by their risk aversion.
     A higher risk_aversion produces smaller, more conservative orders. Unlike
     signal_following, conviction and position size are jointly determined by the
-    utility function rather than a fixed aggression scalar.
+    utility function rather than a fixed aggression scalar. 
     """
     # Clip signal to prevent extreme orders.
     signal = float(np.clip(signal, 1.0 - signal_clip, 1.0 + signal_clip))
@@ -267,24 +267,24 @@ def adapted_signal_following(signal: float, cash: float, shares: float, value: f
     # Case 1: very bullish -> buy near high (if affordable)
     if (signal_value >= high) and (signal_value >= value):
         price = float(high)
-        side = "buy"
+        action = "buy"
 
     # Case 2: mildly bullish -> buy at signal-implied price (bounded)
     elif (signal_value >= value) and (signal_value < high):
         price = float(max(min(signal_value, high), 0.01))
-        side = "buy"
+        action = "buy"
 
     # Case 3: mildly bearish -> sell at signal-implied price (bounded)
     elif (signal_value < value) and (signal_value > low):
         price = float(max(min(signal_value, high), 0.01))
-        side = "sell"
+        action = "sell"
 
     # Case 4: very bearish -> sell near low
     else:
         price = float(max(low, 0.01))
-        side = "sell"
+        action = "sell"
 
-    if side == "buy":
+    if action == "buy":
         if cash_slice <= 0:
             return None
         max_qty = cash / price if price > 0 else 0.0
@@ -309,5 +309,6 @@ STRATEGIES = {
     "signal_following": signal_following,
     "utility_maximiser": utility_maximiser,
     "contrarian": contrarian,
-    "Adapt_sig": adapted_signal_following,
+    "adapt_sig": adapted_signal_following,
 }
+

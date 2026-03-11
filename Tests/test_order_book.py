@@ -1,21 +1,21 @@
 # Run via pytest in terminal
 
 import pytest
-from order_book import clear_market, allocate_trades
+from sim.market import clear_market, allocate_trades
 
-def _side_fills(trades, side):
+def _action_fills(trades, action):
     """Return {agent_id: quantity} for one side of the trades list."""
-    return {t['agent_id']: t['quantity'] for t in trades if t['side'] == side}
+    return {t['agent_id']: t['quantity'] for t in trades if t['action'] == action}
 
 # Basic clearing
 
 class TestBasicClearing:
 
     ORDERS = [
-        {'agent_id': 1, 'price': 100, 'quantity': 10, 'side': 'buy'},
-        {'agent_id': 2, 'price':  99, 'quantity': 15, 'side': 'buy'},
-        {'agent_id': 3, 'price': 101, 'quantity':  8, 'side': 'sell'},
-        {'agent_id': 4, 'price': 100, 'quantity': 12, 'side': 'sell'},
+        {'agent_id': 1, 'price': 100, 'quantity': 10, 'action': 'buy'},
+        {'agent_id': 2, 'price':  99, 'quantity': 15, 'action': 'buy'},
+        {'agent_id': 3, 'price': 101, 'quantity':  8, 'action': 'sell'},
+        {'agent_id': 4, 'price': 100, 'quantity': 12, 'action': 'sell'},
     ]
 
     def test_clearing_price(self):
@@ -28,7 +28,7 @@ class TestBasicClearing:
 
     def test_both_sides_present(self):
         _, trades = clear_market(self.ORDERS, previous_price=99.5)
-        sides = {t['side'] for t in trades}
+        sides = {t['action'] for t in trades}
         assert 'buy' in sides and 'sell' in sides
 
 
@@ -37,8 +37,8 @@ class TestBasicClearing:
 class TestNoMatch:
 
     ORDERS = [
-        {'agent_id': 1, 'price':  90, 'quantity': 10, 'side': 'buy'},
-        {'agent_id': 2, 'price': 100, 'quantity': 10, 'side': 'sell'},
+        {'agent_id': 1, 'price':  90, 'quantity': 10, 'action': 'buy'},
+        {'agent_id': 2, 'price': 100, 'quantity': 10, 'action': 'sell'},
     ]
 
     def test_price_is_none(self):
@@ -55,8 +55,8 @@ class TestNoMatch:
 class TestExactMatch:
 
     ORDERS = [
-        {'agent_id': 'A', 'price': 50, 'quantity': 5, 'side': 'buy'},
-        {'agent_id': 'B', 'price': 50, 'quantity': 5, 'side': 'sell'},
+        {'agent_id': 'A', 'price': 50, 'quantity': 5, 'action': 'buy'},
+        {'agent_id': 'B', 'price': 50, 'quantity': 5, 'action': 'sell'},
     ]
 
     def test_clearing_price(self):
@@ -81,12 +81,12 @@ class TestEdgeCases:
         assert price is None and trades == []
 
     def test_buys_only(self):
-        orders = [{'agent_id': 1, 'price': 100, 'quantity': 5, 'side': 'buy'}]
+        orders = [{'agent_id': 1, 'price': 100, 'quantity': 5, 'action': 'buy'}]
         price, _ = clear_market(orders)
         assert price is None
 
     def test_sells_only(self):
-        orders = [{'agent_id': 1, 'price': 100, 'quantity': 5, 'side': 'sell'}]
+        orders = [{'agent_id': 1, 'price': 100, 'quantity': 5, 'action': 'sell'}]
         price, _ = clear_market(orders)
         assert price is None
 
@@ -101,8 +101,8 @@ class TestTieBreaking:
     """
 
     ORDERS = [
-        {'agent_id': 1, 'price': 101, 'quantity': 10, 'side': 'buy'},
-        {'agent_id': 2, 'price': 100, 'quantity': 10, 'side': 'sell'},
+        {'agent_id': 1, 'price': 101, 'quantity': 10, 'action': 'buy'},
+        {'agent_id': 2, 'price': 100, 'quantity': 10, 'action': 'sell'},
     ]
 
     def test_closest_to_previous_high(self):
@@ -128,11 +128,11 @@ class TestAllocateTrades:
     """
 
     BUYS = [
-        {'agent_id': 'big',   'price': 100, 'quantity': 20, 'side': 'buy'},
-        {'agent_id': 'small', 'price': 100, 'quantity': 10, 'side': 'buy'},
+        {'agent_id': 'big',   'price': 100, 'quantity': 20, 'action': 'buy'},
+        {'agent_id': 'small', 'price': 100, 'quantity': 10, 'action': 'buy'},
     ]
     SELLS = [
-        {'agent_id': 'seller', 'price': 100, 'quantity': 15, 'side': 'sell'},
+        {'agent_id': 'seller', 'price': 100, 'quantity': 15, 'action': 'sell'},
     ]
 
     def test_big_gets_more_than_small(self):
@@ -142,5 +142,5 @@ class TestAllocateTrades:
 
     def test_total_buys_within_supply(self):
         trades = allocate_trades(self.BUYS, self.SELLS, price=100, total_volume=15)
-        total_bought = sum(t['quantity'] for t in trades if t['side'] == 'buy')
+        total_bought = sum(t['quantity'] for t in trades if t['action'] == 'buy')
         assert total_bought <= 15
