@@ -29,7 +29,7 @@ from SQL_Functions import (
 #---------------------------------------------
 
 
-DB_PATH = "C:/Users/bradl/Downloads/ABM_GroupWork-main1/ABM_GroupWork-main/testdataset.duckdb"
+DB_PATH = "testdataset.duckdb"
 
 if not os.path.exists(DB_PATH):
     create_database(DB_PATH)
