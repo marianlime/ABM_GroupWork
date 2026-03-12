@@ -1,7 +1,7 @@
-from .game import game
+from .game import Game
 import hashlib
 import hashlib
-from .game import game
+from .game import Game
 from SQL_Functions import update_run_progress
 from datetime import datetime, timezone
 
@@ -20,11 +20,7 @@ def play_game(
     # --- Agent Counts ---
     DB_PATH,
     n_agents: int,
-    n_zi_agents: int,
-    n_signal_following_agents: int,
-    n_utility_maximiser_agents: int,
-    n_contrarian_agents: int,
-    n_adapt_sig_agents: int,
+    strategy_counts: dict,
     # --- Run / Market ---
     n_rounds: int,
     total_initial_shares: float,
@@ -57,14 +53,10 @@ def play_game(
     fundamental_path=None,
     seed=None
 ):
-    current_game = game(
+    current_game = Game(
         DB_PATH,
         n_agents,
-        n_zi_agents,
-        n_signal_following_agents,
-        n_utility_maximiser_agents,
-        n_contrarian_agents,
-        n_adapt_sig_agents,
+        strategy_counts,
         n_rounds,
         total_initial_shares,
         total_initial_cash,
@@ -110,11 +102,5 @@ def play_game(
 
     completion_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     update_run_progress(DB_PATH, run_id, 100.0, run_status="COMPLETED",completion_time=completion_time)
-
-    return final_score, current_game
-
-    final_score = []
-    for agent_id in current_game.agents:
-        final_score.append((agent_id, current_game.liquidate_assets(agent_id)))
 
     return final_score, current_game

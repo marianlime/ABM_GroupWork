@@ -100,6 +100,15 @@ n_utility_maximiser_agents = 10 # Number of Utility Maximiser Agents
 n_contrarian_agents =  10       # Number of Contrarian Agents
 n_adapt_sig_agents = 10         # Number of Adapted Signal Agents
 
+
+strategy_counts = {
+    "zi" : n_zi_agents,
+    "signal_following" : n_signal_following_agents,
+    "utility_maximiser" : n_utility_maximiser_agents,
+    "contrarian" : n_contrarian_agents,
+    "adapt_sig" : n_adapt_sig_agents
+}
+
 #Run Primary Key
 run_id = generate_ULID()         #UAID format
 
@@ -122,7 +131,7 @@ py_vers = generate_py_Vers()    #Gets the current Python Version
 code_vers = generate_code_Vers()#Generates code version from github repository 
 
 #Agent Data
-n_agents = n_zi_agents + n_signal_following_agents + n_utility_maximiser_agents + n_contrarian_agents + n_adapt_sig_agents #Gets the total number of agents, used for later tests and to store how many agents are deployed per-run
+n_agents = sum(strategy_counts.values()) #Gets the total number of agents, used for later tests and to store how many agents are deployed per-run
 total_initial_cash = 1000 #Sets total initial cash to be split between agents
 total_initial_shares = 10 #Sets total initial shares to be split between agents
 cash_to_share_ratio = total_initial_cash/total_initial_shares #Cash to Share Ratio
@@ -229,11 +238,7 @@ else:
 final_score, g = play_game(
     DB_PATH,
     n_agents,
-    n_zi_agents,
-    n_signal_following_agents,
-    n_utility_maximiser_agents,
-    n_contrarian_agents,
-    n_adapt_sig_agents,
+    strategy_counts,
     n_rounds,
     total_initial_shares,
     total_initial_cash,
@@ -271,4 +276,3 @@ results_df = analyse_game_results(
     final_score,
     title_prefix=f"{experiment_name} | "
 )
-

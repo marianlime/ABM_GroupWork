@@ -2,77 +2,79 @@ from .noise_signal import assign_noise_parameter_set, signal_generator
 from .trader import Trader
 from .market import clear_market
 import numpy as np
-# ----------------------------
-# Game
-# ----------------------------
 
-class game:
+
+class Game:
     def __init__(
-            self, 
-            DB_PATH,
-            n_agents : int,
-            n_zi_agents : int,
-            n_signal_following_agents : int,
-            n_utility_maximiser_agents : int,
-            n_contrarian_agents : int,
-            n_adapt_sig_agents : int,
-            # --- Run / Market ---
-            n_rounds: int,
-            total_initial_shares : float,
-            total_initial_cash : float,
-            cash_to_share_ratio : float,
-            run_id: str,
-            market_mechanism: str,
-            pricing_rule: str,
-            rationing_rule: str,
-            tie_break_rule: str, 
-            transaction_cost_rate: float,
-            # --- Signal / Noise ---
-            noise_parameter_distribution_type : str,
-            distribution_data : dict,
-            signal_generator_noise_distribution : str,
-            bias : float,
-            #--- Fundamentals ---
-            fundamental_source : str,
-            #---GBM Configuration ---
-            S0 : float | None = None,
-            volatility: float | None = None,
-            drift: float | None = None,
-            #---Historical Configuration---
-            ticker: str | None = None,
-            interval: str | None = None,
-            start_date: str | None = None,
-            price_col: str | None = None,
-            auto_adjust: bool | None = None,
-            #--- stock_path ---
-            fundamental_path=None,
-            seed = None):
-        
+        self,
+        DB_PATH,
+        n_agents: int,
+        strategy_counts: dict[str, int],
+        # --- Run / Market ---
+        n_rounds: int,
+        total_initial_shares: float,
+        total_initial_cash: float,
+        cash_to_share_ratio: float,
+        run_id: str,
+        market_mechanism: str,
+        pricing_rule: str,
+        rationing_rule: str,
+        tie_break_rule: str,
+        transaction_cost_rate: float,
+        # --- Signal / Noise ---
+        noise_parameter_distribution_type: str,
+        distribution_data: dict,
+        signal_generator_noise_distribution: str,
+        bias: float,
+        # --- Fundamentals ---
+        fundamental_source: str,
+        # --- GBM Configuration ---
+        S0: float | None = None,
+        volatility: float | None = None,
+        drift: float | None = None,
+        # --- Historical Configuration ---
+        ticker: str | None = None,
+        interval: str | None = None,
+        start_date: str | None = None,
+        price_col: str | None = None,
+        auto_adjust: bool | None = None,
+        # --- stock_path ---
+        fundamental_path=None,
+        seed=None
+    ):
         self.DB_PATH = DB_PATH
 
         self.current_round = 0
         self.agents = {}
 
         self.n_agents = n_agents
-        self.n_zi_agents = n_zi_agents
-        self.n_signal_following_agents = n_signal_following_agents
-        self.n_utility_maximiser_agents = n_utility_maximiser_agents
-        self.n_contrarian_agents = n_contrarian_agents
-        self.n_adapt_sig_agents = n_adapt_sig_agents
-        
+        self.strategy_counts = strategy_counts.copy()
+
+        self.n_zi_agents = self.strategy_counts.get("zi", 0)
+        self.n_signal_following_agents = self.strategy_counts.get("signal_following", 0)
+        self.n_utility_maximiser_agents = self.strategy_counts.get("utility_maximiser", 0)
+        self.n_contrarian_agents = self.strategy_counts.get("contrarian", 0)
+        self.n_adapt_sig_agents = self.strategy_counts.get("adapt_sig", 0)
+
+        if sum(self.strategy_counts.values()) != self.n_agents:
+            raise ValueError(
+                f"Sum of strategy_counts ({sum(self.strategy_counts.values())}) "
+                f"does not equal n_agents ({self.n_agents})."
+            )
+
         self.fundamental_source = fundamental_source
         self.n_rounds = n_rounds
         self.fundamental_path = fundamental_path
         self.total_initial_shares = total_initial_shares
         self.total_initial_cash = total_initial_cash
 
-        #fundamental source = GBM
+        # fundamental source = GBM
         self.S0 = S0
         self.volatility = volatility
         self.drift = drift
         self.run_id = run_id
-        
-        #fundamental source = Historical
+
+        # fundamental source = Historical
         self.ticker = ticker
         self.interval = interval
         self.start_date = start_date
@@ -104,67 +106,37 @@ class game:
         self.price_history = {}
 
         self.noise_parameter_set = assign_noise_parameter_set(
-            n_agents = self.n_agents, noise_parameter_distribution_type= self.noise_parameter_distribution_type, distribution_data=self.distribution_data)
-        
-        agent_id = 1
+            n_agents=self.n_agents,
+            noise_parameter_distribution_type=self.noise_parameter_distribution_type,
+            distribution_data=self.distribution_data
+        )
 
+        agent_id = 1
         cash_per_agent = self.total_initial_cash / self.n_agents
         shares_per_agent = self.total_initial_shares / self.n_agents
 
-        for i in range(n_zi_agents):
-            self.agents[agent_id] = Trader(
-                agent_id=agent_id,
-                cash=cash_per_agent,
-                shares=shares_per_agent,
-                info_param=float(self.noise_parameter_set[agent_id-1]),
-                strategy_probs=None,
-                trader_type="zi"
-            )
-            agent_id += 1
+        strategy_creation_order = [
+            "zi",
+            "signal_following",
+            "utility_maximiser",
+            "contrarian",
+            "adapt_sig",
+        ]
 
-        for i in range(n_signal_following_agents):
-            self.agents[agent_id] = Trader(
-                agent_id=agent_id,
-                cash=cash_per_agent,
-                shares=shares_per_agent,
-                info_param=float(self.noise_parameter_set[agent_id-1]),
-                strategy_probs=None,
-                trader_type="signal_following"
-            )
-            agent_id += 1
+        for trader_type in strategy_creation_order:
+            count = self.strategy_counts.get(trader_type, 0)
 
-        for i in range(n_utility_maximiser_agents):
-            self.agents[agent_id] = Trader(
-                agent_id=agent_id,
-                cash=cash_per_agent,
-                shares=shares_per_agent,
-                info_param=float(self.noise_parameter_set[agent_id-1]),
-                strategy_probs=None,
-                trader_type="utility_maximiser"
-            )
-            agent_id += 1
+            for _ in range(count):
+                self.agents[agent_id] = Trader(
+                    agent_id=agent_id,
+                    cash=cash_per_agent,
+                    shares=shares_per_agent,
+                    info_param=float(self.noise_parameter_set[agent_id - 1]),
+                    strategy_probs=None,
+                    trader_type=trader_type
+                )
+                agent_id += 1
 
-        for i in range(n_contrarian_agents):
-            self.agents[agent_id] = Trader(
-                agent_id=agent_id,
-                cash=cash_per_agent,
-                shares=shares_per_agent,
-                info_param=float(self.noise_parameter_set[agent_id-1]),
-                strategy_probs=None,
-                trader_type="contrarian"
-            )
-            agent_id += 1
-
-        for i in range(n_adapt_sig_agents):
-            self.agents[agent_id] = Trader(
-                agent_id=agent_id,
-                cash=cash_per_agent,
-                shares=shares_per_agent,
-                info_param=float(self.noise_parameter_set[agent_id-1]),
-                strategy_probs=None,
-                trader_type="adapt_sig"
-            )
-            agent_id += 1
     def gather_orders_and_clear(self, current_round):
 
         agent_round_records = {}
@@ -180,7 +152,7 @@ class game:
         value = float(self.fundamental_path[current_round])
 
         for agent_id, player in self.agents.items():
-            
+
             cash_start = float(player.cash)
             inventory_start = float(player.shares)
 
@@ -343,22 +315,21 @@ class game:
 
         return best_price, total_volume, trades
 
-
     def update_portfolio(self, trade):
-        agent = self.agents[trade['agent_id']]
+        agent = self.agents[trade["agent_id"]]
 
-        qty = float(trade['quantity'])
-        px = float(trade['price'])
-        action = (trade['action'])
+        qty = float(trade["quantity"])
+        px = float(trade["price"])
+        action = trade["action"]
 
         trade_value = qty * px
         fee = trade_value * self.transaction_cost_rate
 
-        if action == 'buy':
+        if action == "buy":
             agent.shares += qty
             agent.cash -= qty * px
             agent.cash -= fee
-        elif action == 'sell':
+        elif action == "sell":
             agent.shares -= qty
             agent.cash += qty * px
             agent.cash -= fee
