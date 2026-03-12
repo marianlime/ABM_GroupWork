@@ -8,8 +8,7 @@ class Game:
     def __init__(
         self,
         DB_PATH,
-        n_agents: int,
-        strategy_counts: dict[str, int],
+        population_spec: list[dict],
         # --- Run / Market ---
         n_rounds: int,
         total_initial_shares: float,
@@ -47,20 +46,17 @@ class Game:
         self.current_round = 0
         self.agents = {}
 
-        self.n_agents = n_agents
-        self.strategy_counts = strategy_counts.copy()
+        self.population_spec = population_spec
+        self.n_agents = len(population_spec)
 
-        self.n_zi_agents = self.strategy_counts.get("zi", 0)
-        self.n_signal_following_agents = self.strategy_counts.get("signal_following", 0)
-        self.n_utility_maximiser_agents = self.strategy_counts.get("utility_maximiser", 0)
-        self.n_contrarian_agents = self.strategy_counts.get("contrarian", 0)
-        self.n_adapt_sig_agents = self.strategy_counts.get("adapt_sig", 0)
+        if self.n_agents == 0:
+            raise ValueError("population_spec must contain at least one agent")
 
-        if sum(self.strategy_counts.values()) != self.n_agents:
-            raise ValueError(
-                f"Sum of strategy_counts ({sum(self.strategy_counts.values())}) "
-                f"does not equal n_agents ({self.n_agents})."
-            )
+        self.n_zi_agents = sum(1 for agent in population_spec if agent["trader_type"] == "zi")
+        self.n_signal_following_agents = sum(1 for agent in population_spec if agent["trader_type"] == "signal_following")
+        self.n_utility_maximiser_agents = sum(1 for agent in population_spec if agent["trader_type"] == "utility_maximiser")
+        self.n_contrarian_agents = sum(1 for agent in population_spec if agent["trader_type"] == "contrarian")
+        self.n_adapt_sig_agents = sum(1 for agent in population_spec if agent["trader_type"] == "adapt_sig")
 
         self.fundamental_source = fundamental_source
         self.n_rounds = n_rounds
@@ -111,31 +107,31 @@ class Game:
             distribution_data=self.distribution_data
         )
 
-        agent_id = 1
         cash_per_agent = self.total_initial_cash / self.n_agents
         shares_per_agent = self.total_initial_shares / self.n_agents
 
-        strategy_creation_order = [
+        valid_trader_types = {
             "zi",
             "signal_following",
             "utility_maximiser",
             "contrarian",
             "adapt_sig",
-        ]
+        }
 
-        for trader_type in strategy_creation_order:
-            count = self.strategy_counts.get(trader_type, 0)
+        for agent_id, agent_spec in enumerate(self.population_spec, start=1):
+            trader_type = agent_spec["trader_type"]
 
-            for _ in range(count):
-                self.agents[agent_id] = Trader(
-                    agent_id=agent_id,
-                    cash=cash_per_agent,
-                    shares=shares_per_agent,
-                    info_param=float(self.noise_parameter_set[agent_id - 1]),
-                    strategy_probs=None,
-                    trader_type=trader_type
-                )
-                agent_id += 1
+            if trader_type not in valid_trader_types:
+                raise ValueError(f"Unknown trader_type in population_spec: {trader_type}")
+
+            self.agents[agent_id] = Trader(
+                agent_id=agent_id,
+                cash=cash_per_agent,
+                shares=shares_per_agent,
+                info_param=float(self.noise_parameter_set[agent_id - 1]),
+                strategy_probs=None,
+                trader_type=trader_type
+            )
 
     def gather_orders_and_clear(self, current_round):
 

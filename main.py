@@ -2,10 +2,13 @@
 import os
 import sys
 import subprocess
+import random
 from datetime import datetime, timezone
+
 #---------- Third-Party Libraries ------------
 import ulid
 import pandas as pd
+
 #------------- Project Modules ---------------
 from database_creation import create_database
 from analysis import analyse_game_results
@@ -16,6 +19,11 @@ from sim.gbm import (
 )
 
 from sim.runner import play_game
+from sim.evolution import (
+    initial_population_from_counts,
+    evolve_population,
+    count_strategies,
+)
 
 from SQL_Functions import (
     insert_run_row,
@@ -34,7 +42,7 @@ DB_PATH = "testdataset.duckdb"
 if not os.path.exists(DB_PATH):
     create_database(DB_PATH)
 
-#INITIAL PARAMETER SETS DO NOT CHANGE
+# INITIAL PARAMETER SETS DO NOT CHANGE
 S0 = None
 volatility = None
 drift = None
@@ -46,7 +54,8 @@ price_col = None
 auto_adjust = None
 fundamental_path = None
 completion_time = None
-#INITIAL PARAMETER SETS DO NOT CHANGE
+# INITIAL PARAMETER SETS DO NOT CHANGE
+
 
 def compute_end_date(start_date, n_rounds, interval):
     start_date = pd.Timestamp(start_date)
@@ -65,9 +74,7 @@ def compute_end_date(start_date, n_rounds, interval):
     }
 
     step = interval_map[interval]
-
     end_date = start_date + n_rounds * step
-
     return end_date
 
 
@@ -75,204 +82,323 @@ def compute_end_date(start_date, n_rounds, interval):
 # Example params + run
 # ----------------------------
 
-def generate_ULID() -> str: #Function for generating the ULID for each run
+def generate_ULID() -> str:
     return str(ulid.new())
 
-def generate_py_Vers() -> str: #Function for generating the python version for each run
+
+def generate_py_Vers() -> str:
     return str(sys.version)
 
-def generate_time() -> str: #Function for generating the creation time of the run
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S") 
 
-def generate_code_Vers() -> str: #Function for getting the current code version (based off github)
+def generate_time() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def generate_code_Vers() -> str:
     try:
-        return subprocess.check_output(["git", "describe", "--tags", "--dirty", "--always"],stderr=subprocess.DEVNULL).decode().strip()
+        return subprocess.check_output(
+            ["git", "describe", "--tags", "--dirty", "--always"],
+            stderr=subprocess.DEVNULL
+        ).decode().strip()
     except Exception:
         return "unknown"
 
-#-----------------------------
 
-#RUN DATA RUN DATA RUN DATA RUN DATA RUN DATA RUN DATA RUN DATA RUN DATA
+# -----------------------------
+# EVOLUTION / EXPERIMENT DATA
+# -----------------------------
 
-n_zi_agents = 10                # Number of ZI agents
-n_signal_following_agents = 10  # Number of Signal Following Agents
-n_utility_maximiser_agents = 10 # Number of Utility Maximiser Agents
-n_contrarian_agents =  10       # Number of Contrarian Agents
-n_adapt_sig_agents = 10         # Number of Adapted Signal Agents
+n_generations = 5
 
-
-strategy_counts = {
-    "zi" : n_zi_agents,
-    "signal_following" : n_signal_following_agents,
-    "utility_maximiser" : n_utility_maximiser_agents,
-    "contrarian" : n_contrarian_agents,
-    "adapt_sig" : n_adapt_sig_agents
+algorithm_name = "truncation"
+algorithm_params = {
+    "top_n": 10,
+    "bottom_k": 10,
 }
 
-#Run Primary Key
-run_id = generate_ULID()         #UAID format
+experiment_seed = 42
+rng = random.Random(experiment_seed)
 
-#Run Info
-print(f"Run {run_id} created")                       #Test to make sure it works
-experiment_name = "Experiment Name"                  #Name of the experiment
-experiment_type = "A sub section for the experiment" #Type of experiment
-creation_time = generate_time()                      #Generates the time of creation
-run_notes = "Notes for the run"                      #Run notes
-n_rounds = 100                                       #Number of rounds 
-fundamental_source = "GBM"                           #Source of fundamental ["GBM", "Historical"] 
+# -----------------------------
+# RUN DATA
+# -----------------------------
 
+n_zi_agents = 20
+n_signal_following_agents = 20
+n_utility_maximiser_agents = 20
+n_contrarian_agents = 20
+n_adapt_sig_agents = 20
 
-#Run Status
-run_status = "STARTED"          #run_status [STARTED, RUNNING, COMPLETED, FAILED]
-run_progress = 0                #run_progress (0-100%, changes throughout)
+strategy_counts = {
+    "zi": n_zi_agents,
+    "signal_following": n_signal_following_agents,
+    "utility_maximiser": n_utility_maximiser_agents,
+    "contrarian": n_contrarian_agents,
+    "adapt_sig": n_adapt_sig_agents
+}
 
-#Version data
-py_vers = generate_py_Vers()    #Gets the current Python Version 
-code_vers = generate_code_Vers()#Generates code version from github repository 
+# Generation 0 population
+population_spec = initial_population_from_counts(strategy_counts)
 
-#Agent Data
-n_agents = sum(strategy_counts.values()) #Gets the total number of agents, used for later tests and to store how many agents are deployed per-run
-total_initial_cash = 1000 #Sets total initial cash to be split between agents
-total_initial_shares = 10 #Sets total initial shares to be split between agents
-cash_to_share_ratio = total_initial_cash/total_initial_shares #Cash to Share Ratio
+# Run / experiment info
+experiment_name = "Experiment Name"
+experiment_type = "A sub section for the experiment"
+run_notes = "Notes for the run"
+n_rounds = 100
+fundamental_source = "GBM"   # ["GBM", "Historical"]
 
-#Market Mechanisms
-market_mechanism = "call_auction"  #
-pricing_rule = "maximum_volume_minimum_imbalance" #
-rationing_rule = "proportional_rationing" # 
-tie_break_rule = "previous_price_proximity" #
-transaction_cost_rate = 0.000 #Transaction Cost, applied for every buy order and sell order
+# Version data
+py_vers = generate_py_Vers()
+code_vers = generate_code_Vers()
 
-noise_parameter_distribution_type = "uniform" #Options - [uniform, bimodal, skewed, evenly_spaced]
+# Agent Data
+n_agents = sum(strategy_counts.values())
+total_initial_cash = 1000
+total_initial_shares = 10
+cash_to_share_ratio = total_initial_cash / total_initial_shares
+
+# Market Mechanisms
+market_mechanism = "call_auction"
+pricing_rule = "maximum_volume_minimum_imbalance"
+rationing_rule = "proportional_rationing"
+tie_break_rule = "previous_price_proximity"
+transaction_cost_rate = 0.000
+
+# Noise / signal setup
+noise_parameter_distribution_type = "uniform"  # [uniform, bimodal, skewed, evenly_spaced]
 
 if noise_parameter_distribution_type == "uniform":
-    low = 0.0 
+    low = 0.0
     high = 0.5
-    distribution_data = {"low": low, 
-                         "high": high}
+    distribution_data = {
+        "low": low,
+        "high": high
+    }
 
 elif noise_parameter_distribution_type == "bimodal":
     group_a_mean = 0.1
-    group_a_std  = 0.05
+    group_a_std = 0.05
     group_b_mean = 0.9
-    group_b_std  = 0.05
+    group_b_std = 0.05
     distribution_data = {
         "group_a_mean": group_a_mean,
-        "group_a_std" : group_a_std,
+        "group_a_std": group_a_std,
         "group_b_mean": group_b_mean,
-        "group_b_std" : group_b_std
+        "group_b_std": group_b_std
     }
 
 elif noise_parameter_distribution_type == "skewed":
     mean = -1
     sigma = 0.5
-    distribution_data = {"mean" : mean,
-                         "sigma" : sigma}
+    distribution_data = {
+        "mean": mean,
+        "sigma": sigma
+    }
+
 elif noise_parameter_distribution_type == "evenly_spaced":
-    low  = 0.05
+    low = 0.05
     high = 0.1
-    distribution_data = {"low": low,
-                         "high": high}
-else:
-    raise ValueError(f"Unknown noise_parameter_distribution_type: {noise_parameter_distribution_type}")
-
-signal_generator_noise_distribution = 'lognormal' #[lognormal, uniform]
-bias = 0.0 
-
-
-insert_run_row(DB_PATH,
-               run_id,
-               experiment_name,
-               experiment_type,
-               creation_time,
-               completion_time, 
-               run_notes, n_rounds, 
-               fundamental_source, 
-               run_status, 
-               run_progress, 
-               py_vers, 
-               code_vers, 
-               n_agents,
-               total_initial_cash,
-               total_initial_shares,
-               market_mechanism,
-               pricing_rule,rationing_rule,
-               tie_break_rule,transaction_cost_rate,
-               noise_parameter_distribution_type,
-               distribution_data,
-               signal_generator_noise_distribution,
-               bias)
-
-
-#Generate fundamental path
-if fundamental_source == "GBM":
-    #GBM Config
-    S0 = 100
-    volatility = 0.01
-    drift = 0.01
-    seed = "SAGFJAKFGAGFKALFJGAFAGJDGSJGFGGF"
-    insert_gbm_config_row(DB_PATH, run_id, S0, volatility, drift, seed)
-    fundamental_path = simulate_gbm(S0, volatility, drift, n_rounds, seed)
-    fundamental_series = tuple(enumerate(fundamental_path))
-    insert_fundamental_series(DB_PATH, run_id, fundamental_series)
-
-elif fundamental_source == "Historical":
-    #Historical Config
-    ticker = "AAPL"
-    interval = "1d"
-    start_date = "2024-01-01"
-    end_date = compute_end_date(start_date, n_rounds, interval)
-    price_col = "Close"
-    auto_adjust = True
-    insert_hist_config_row(DB_PATH, run_id, ticker, interval, start_date, end_date, price_col, auto_adjust)
-    fundamental_path = simulate_from_yfinance(ticker,start_date,n_rounds,interval,price_col,auto_adjust)
-    fundamental_series = tuple(enumerate(fundamental_path))
-    insert_fundamental_series(DB_PATH, run_id, fundamental_series)
+    distribution_data = {
+        "low": low,
+        "high": high
+    }
 
 else:
-    raise ValueError("Error")
+    raise ValueError(
+        f"Unknown noise_parameter_distribution_type: {noise_parameter_distribution_type}"
+    )
+
+signal_generator_noise_distribution = "lognormal"   # [lognormal, uniform]
+bias = 0.0
+
+# Store composition history for plotting / inspection later
+generation_counts = []
+
+# Keep references to the last generation's outputs
+last_game = None
+last_final_score = None
+
 # ----------------------------
-# Runner
+# Evolutionary loop
 # ----------------------------
 
-final_score, g = play_game(
-    DB_PATH,
-    n_agents,
-    strategy_counts,
-    n_rounds,
-    total_initial_shares,
-    total_initial_cash,
-    cash_to_share_ratio,
-    run_id,
-    market_mechanism,
-    pricing_rule,
-    rationing_rule,
-    tie_break_rule,
-    transaction_cost_rate,
-    noise_parameter_distribution_type,
-    distribution_data,
-    signal_generator_noise_distribution,
-    bias,
-    fundamental_source,
-    S0,
-    volatility,
-    drift,
-    ticker,
-    interval,
-    start_date,
-    price_col,
-    auto_adjust,
-    fundamental_path,
-    seed
-)
+for generation in range(n_generations):
+    run_id = generate_ULID()
+    creation_time = generate_time()
+    completion_time = None
 
-insert_agent_population(DB_PATH, run_id, g.agents)
-insert_market_round_rows(DB_PATH, g.market_round_records)
-insert_agent_round_rows(DB_PATH, g.agent_round_records)
+    # Each generation is stored as its own run in the DB.
+    run_status = "STARTED"
+    run_progress = 0
 
+    # Record composition at the start of the generation.
+    current_counts = count_strategies(population_spec)
+    generation_counts.append({
+        "generation": generation,
+        **current_counts
+    })
+
+    print(f"Generation {generation} | Run {run_id} created | Composition: {current_counts}")
+
+    insert_run_row(
+        DB_PATH,
+        run_id,
+        experiment_name,
+        f"{experiment_type} | generation_{generation}",
+        creation_time,
+        completion_time,
+        run_notes,
+        n_rounds,
+        fundamental_source,
+        run_status,
+        run_progress,
+        py_vers,
+        code_vers,
+        n_agents,
+        total_initial_cash,
+        total_initial_shares,
+        market_mechanism,
+        pricing_rule,
+        rationing_rule,
+        tie_break_rule,
+        transaction_cost_rate,
+        noise_parameter_distribution_type,
+        distribution_data,
+        signal_generator_noise_distribution,
+        bias
+    )
+
+    # ----------------------------
+    # Generate a fresh fundamental path for this generation
+    # ----------------------------
+
+    if fundamental_source == "GBM":
+        S0 = 100
+        volatility = 0.2
+        drift = 0.01
+
+        # Use a generation-specific seed so paths differ across generations
+        seed = f"gbm_generation_{generation}_seed_{experiment_seed}"
+
+        insert_gbm_config_row(DB_PATH, run_id, S0, volatility, drift, seed)
+
+        fundamental_path = simulate_gbm(S0, volatility, drift, n_rounds, seed)
+        fundamental_series = tuple(enumerate(fundamental_path))
+        insert_fundamental_series(DB_PATH, run_id, fundamental_series)
+
+        # Reset unused historical fields
+        ticker = None
+        interval = None
+        start_date = None
+        price_col = None
+        auto_adjust = None
+
+    elif fundamental_source == "Historical":
+        ticker = "AAPL"
+        interval = "1d"
+        start_date = "2024-01-01"
+        end_date = compute_end_date(start_date, n_rounds, interval)
+        price_col = "Close"
+        auto_adjust = True
+        seed = None
+
+        insert_hist_config_row(
+            DB_PATH,
+            run_id,
+            ticker,
+            interval,
+            start_date,
+            end_date,
+            price_col,
+            auto_adjust
+        )
+
+        fundamental_path = simulate_from_yfinance(
+            ticker,
+            start_date,
+            n_rounds,
+            interval,
+            price_col,
+            auto_adjust
+        )
+        fundamental_series = tuple(enumerate(fundamental_path))
+        insert_fundamental_series(DB_PATH, run_id, fundamental_series)
+
+        # Reset unused GBM fields
+        S0 = None
+        volatility = None
+        drift = None
+
+    else:
+        raise ValueError("Error")
+
+    # ----------------------------
+    # Run this generation's game
+    # ----------------------------
+
+    final_score, g = play_game(
+        DB_PATH,
+        population_spec,
+        n_rounds,
+        total_initial_shares,
+        total_initial_cash,
+        cash_to_share_ratio,
+        run_id,
+        market_mechanism,
+        pricing_rule,
+        rationing_rule,
+        tie_break_rule,
+        transaction_cost_rate,
+        noise_parameter_distribution_type,
+        distribution_data,
+        signal_generator_noise_distribution,
+        bias,
+        fundamental_source,
+        S0,
+        volatility,
+        drift,
+        ticker,
+        interval,
+        start_date,
+        price_col,
+        auto_adjust,
+        fundamental_path,
+        seed
+    )
+
+    # Persist outputs for this generation
+    insert_market_round_rows(DB_PATH, g.market_round_records)
+    insert_agent_round_rows(DB_PATH, g.agent_round_records)
+
+    # Keep references to the most recent game
+    last_game = g
+    last_final_score = final_score
+
+    # Evolve into the next generation, unless this is the final generation.
+    if generation < n_generations - 1:
+        population_spec = evolve_population(
+            algorithm_name=algorithm_name,
+            final_score=final_score,
+            agents=g.agents,
+            algorithm_params=algorithm_params,
+            rng=rng
+        )
+
+
+# ----------------------------
+# Post-run outputs
+# ----------------------------
+
+generation_counts_df = pd.DataFrame(generation_counts)
+print("\nGeneration strategy counts:")
+print(generation_counts_df)
+
+# Analyse the final generation only, to keep changes minimal.
+generation_counts_df = pd.DataFrame(generation_counts)
 
 results_df = analyse_game_results(
-    g,
-    final_score,
-    title_prefix=f"{experiment_name} | "
+    last_game,
+    last_final_score,
+    title_prefix=f"{experiment_name} | Final Generation | ",
+    generation_counts_df=generation_counts_df,
 )
