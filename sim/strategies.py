@@ -247,16 +247,6 @@ def contrarian(signal: float, cash: float, shares: float, value: float,
 
 
 def adapted_signal_following(signal: float, cash: float, shares: float, value: float, aggression: float = None):
-    """
-    NOTE: Your original version had several bugs:
-      - used '&' instead of 'and' (bitwise vs boolean)
-      - inconsistent Buy/Sell fields and duplicated keys
-      - "Quantity: " key has a typo
-    This version keeps your apparent intent but returns standard order objects.
-
-    I’m preserving the general structure: choose a price in [low, high] based on signal and
-    submit a fixed fraction of cash as qty proxy.
-    """
     price_range = 0.2
     low = value * (1 - price_range)
     high = value * (1 + price_range)
@@ -304,11 +294,211 @@ def adapted_signal_following(signal: float, cash: float, shares: float, value: f
             "Sell": 1.0 if action == "sell" else 0.0,
             "Hold": 0.0}
 
+def threshold_signal(
+    signal: float,
+    cash: float,
+    shares: float,
+    value: float,
+    threshold: float = 0.03,
+    aggression: float = 1.0,
+    signal_clip: float = 0.25,
+    min_qty_fraction: float = 0.01,
+) -> dict:
+    """
+    Signal-following trader with a no-trade band.
+
+    Only trades when |signal - 1| exceeds `threshold`.
+    This reduces overtrading on weak/noisy signals.
+    """
+    signal = float(np.clip(signal, 1.0 - signal_clip, 1.0 + signal_clip))
+    edge = signal - 1.0
+
+    if abs(edge) < threshold:
+        return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
+
+    action = "buy" if edge > 0 else "sell"
+
+    if action == "buy" and cash <= 0:
+        return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
+    if action == "sell" and shares <= 0:
+        return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
+
+    price = max(round(value * signal, 2), 0.01)
+
+    conviction = abs(edge) - threshold
+    scaled_conviction = min(max(conviction / max(signal_clip - threshold, 1e-8), 0.0), 1.0)
+    fraction = min(scaled_conviction * aggression, 1.0)
+
+    if action == "buy":
+        max_qty = cash / price if price > 0 else 0.0
+        quantity = float(np.clip(
+            round(max_qty * fraction, 6),
+            min_qty_fraction * max_qty,
+            max_qty
+        )) if max_qty > 0 else 0.0
+    else:
+        max_qty = shares
+        quantity = float(np.clip(
+            round(max_qty * fraction, 6),
+            min_qty_fraction * max_qty,
+            max_qty
+        )) if max_qty > 0 else 0.0
+
+    if quantity <= 0:
+        return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
+
+    return {
+        "Price": price,
+        "Quantity": quantity,
+        "Buy": 1.0 if action == "buy" else 0.0,
+        "Sell": 1.0 if action == "sell" else 0.0,
+        "Hold": 0.0,
+    }
+
+
+def inventory_aware_utility(
+    signal: float,
+    cash: float,
+    shares: float,
+    value: float,
+    risk_aversion: float = 2.0,
+    signal_clip: float = 0.25,
+    target_base_weight: float = 0.5,
+    min_qty_fraction: float = 0.01,
+) -> dict:
+    """
+    Utility-style trader that targets a desired risky-asset portfolio weight.
+
+    target_weight = base_weight + signal_tilt
+    then trades toward that target subject to cash/share constraints.
+    """
+    signal = float(np.clip(signal, 1.0 - signal_clip, 1.0 + signal_clip))
+    expected_return = signal - 1.0
+    variance_proxy = max((signal_clip / 2.0) ** 2, 1e-8)
+
+    wealth = cash + shares * value
+    if wealth <= 0 or value <= 0:
+        return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
+
+    current_risky_weight = (shares * value) / wealth
+
+    signal_tilt = expected_return / (risk_aversion * variance_proxy)
+    target_weight = float(np.clip(target_base_weight + signal_tilt, 0.0, 1.0))
+
+    trade_weight = target_weight - current_risky_weight
+
+    if abs(trade_weight) < 1e-6:
+        return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
+
+    action = "buy" if trade_weight > 0 else "sell"
+    price = max(round(value * signal, 2), 0.01)
+
+    if action == "buy":
+        if cash <= 0:
+            return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
+        target_notional = abs(trade_weight) * wealth
+        raw_qty = target_notional / price
+        max_qty = cash / price if price > 0 else 0.0
+        quantity = float(np.clip(
+            round(raw_qty, 6),
+            min_qty_fraction * max_qty,
+            max_qty
+        )) if max_qty > 0 else 0.0
+    else:
+        if shares <= 0:
+            return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
+        target_notional = abs(trade_weight) * wealth
+        raw_qty = target_notional / max(value, 1e-8)
+        max_qty = shares
+        quantity = float(np.clip(
+            round(raw_qty, 6),
+            min_qty_fraction * max_qty,
+            max_qty
+        )) if max_qty > 0 else 0.0
+
+    if quantity <= 0:
+        return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
+
+    return {
+        "Price": price,
+        "Quantity": quantity,
+        "Buy": 1.0 if action == "buy" else 0.0,
+        "Sell": 1.0 if action == "sell" else 0.0,
+        "Hold": 0.0,
+    }
+
+
+def patient_signal(
+    signal: float,
+    cash: float,
+    shares: float,
+    value: float,
+    aggression: float = 0.8,
+    patience: float = 0.5,
+    signal_clip: float = 0.25,
+    min_qty_fraction: float = 0.01,
+) -> dict:
+    """
+    Signal-following trader with less aggressive pricing.
+
+    Trades in the signal direction, but posts a limit price part-way
+    between current value and full signal-implied value.
+    """
+    signal = float(np.clip(signal, 1.0 - signal_clip, 1.0 + signal_clip))
+    edge = signal - 1.0
+
+    if abs(edge) < 1e-6:
+        return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
+
+    action = "buy" if edge > 0 else "sell"
+
+    if action == "buy" and cash <= 0:
+        return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
+    if action == "sell" and shares <= 0:
+        return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
+
+    # patience in [0,1]: lower values stay closer to value
+    patient_signal_level = 1.0 + patience * edge
+    price = max(round(value * patient_signal_level, 2), 0.01)
+
+    conviction = abs(edge)
+    fraction = min(conviction * aggression * 8, 1.0)
+
+    if action == "buy":
+        max_qty = cash / price if price > 0 else 0.0
+        quantity = float(np.clip(
+            round(max_qty * fraction, 6),
+            min_qty_fraction * max_qty,
+            max_qty
+        )) if max_qty > 0 else 0.0
+    else:
+        max_qty = shares
+        quantity = float(np.clip(
+            round(max_qty * fraction, 6),
+            min_qty_fraction * max_qty,
+            max_qty
+        )) if max_qty > 0 else 0.0
+
+    if quantity <= 0:
+        return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
+
+    return {
+        "Price": price,
+        "Quantity": quantity,
+        "Buy": 1.0 if action == "buy" else 0.0,
+        "Sell": 1.0 if action == "sell" else 0.0,
+        "Hold": 0.0,
+    }
+
+
 STRATEGIES = {
     "zi": zero_intelligence,
     "signal_following": signal_following,
     "utility_maximiser": utility_maximiser,
     "contrarian": contrarian,
     "adapt_sig": adapted_signal_following,
+    "threshold_signal": threshold_signal,
+    "inventory_aware_utility": inventory_aware_utility,
+    "patient_signal": patient_signal,
 }
 

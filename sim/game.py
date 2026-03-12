@@ -57,6 +57,9 @@ class Game:
         self.n_utility_maximiser_agents = sum(1 for agent in population_spec if agent["trader_type"] == "utility_maximiser")
         self.n_contrarian_agents = sum(1 for agent in population_spec if agent["trader_type"] == "contrarian")
         self.n_adapt_sig_agents = sum(1 for agent in population_spec if agent["trader_type"] == "adapt_sig")
+        self.n_threshold_signal_agents = sum(1 for agent in population_spec if agent["trader_type"] == "threshold_signal")
+        self.n_inventory_aware_utility_agents = sum(1 for agent in population_spec if agent["trader_type"] == "inventory_aware_utility")
+        self.n_patient_signal_agents = sum(1 for agent in population_spec if agent["trader_type"] == "patient_signal")
 
         self.fundamental_source = fundamental_source
         self.n_rounds = n_rounds
@@ -116,6 +119,9 @@ class Game:
             "utility_maximiser",
             "contrarian",
             "adapt_sig",
+            "threshold_signal",
+            "inventory_aware_utility",
+            "patient_signal",
         }
 
         for agent_id, agent_spec in enumerate(self.population_spec, start=1):

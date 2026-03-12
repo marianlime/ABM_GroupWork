@@ -108,7 +108,7 @@ def generate_code_Vers() -> str:
 # EVOLUTION / EXPERIMENT DATA
 # -----------------------------
 
-n_generations = 5
+n_generations = 10
 
 algorithm_name = "truncation"
 algorithm_params = {
@@ -123,18 +123,24 @@ rng = random.Random(experiment_seed)
 # RUN DATA
 # -----------------------------
 
-n_zi_agents = 20
-n_signal_following_agents = 20
-n_utility_maximiser_agents = 20
-n_contrarian_agents = 20
-n_adapt_sig_agents = 20
+n_zi_agents = 500
+n_signal_following_agents = 15
+n_utility_maximiser_agents = 15
+n_contrarian_agents = 15
+n_adapt_sig_agents = 15
+n_threshold_signal_agents = 0
+n_inventory_aware_utility_agents = 0
+n_patient_signal_agents = 0
 
 strategy_counts = {
     "zi": n_zi_agents,
     "signal_following": n_signal_following_agents,
     "utility_maximiser": n_utility_maximiser_agents,
     "contrarian": n_contrarian_agents,
-    "adapt_sig": n_adapt_sig_agents
+    "adapt_sig": n_adapt_sig_agents,
+    "threshold_signal": n_threshold_signal_agents,
+    "inventory_aware_utility": n_inventory_aware_utility_agents,
+    "patient_signal": n_patient_signal_agents,
 }
 
 # Generation 0 population
@@ -144,8 +150,8 @@ population_spec = initial_population_from_counts(strategy_counts)
 experiment_name = "Experiment Name"
 experiment_type = "A sub section for the experiment"
 run_notes = "Notes for the run"
-n_rounds = 100
-fundamental_source = "GBM"   # ["GBM", "Historical"]
+n_rounds = 10
+fundamental_source = "Historical"   # ["GBM", "Historical"]
 
 # Version data
 py_vers = generate_py_Vers()
@@ -169,7 +175,7 @@ noise_parameter_distribution_type = "uniform"  # [uniform, bimodal, skewed, even
 
 if noise_parameter_distribution_type == "uniform":
     low = 0.0
-    high = 0.5
+    high = 0.4
     distribution_data = {
         "low": low,
         "high": high

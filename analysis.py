@@ -31,7 +31,6 @@ def analyse_game_results(
 
     rows = []
     for aid, agent in g.agents.items():
-        # infer type
         if hasattr(agent, "trader_type"):
             ttype = agent.trader_type
         elif n_strategic_agents is not None:
@@ -64,7 +63,6 @@ def analyse_game_results(
     print(df.groupby("type")["wealth_final"].agg(["count", "mean", "std", "min", "median", "max"]).to_string())
 
     # ----- Info parameter effect diagnostics -----
-    # Analyze all non-ZI traders, since multiple strategy types may be informed.
     informed = df[df["type"] != "zi"].copy()
 
     if len(informed) > 5 and informed["info_param"].notna().any():
@@ -74,7 +72,9 @@ def analyse_game_results(
 
         try:
             informed["info_bin"] = pd.qcut(informed["info_param"], q=5, duplicates="drop")
-            bin_stats = informed.groupby("info_bin")["wealth_final"].agg(["count", "mean", "std", "min", "median", "max"])
+            bin_stats = informed.groupby("info_bin")["wealth_final"].agg(
+                ["count", "mean", "std", "min", "median", "max"]
+            )
             print("\n=== Non-ZI traders: wealth by info_param quintile ===")
             print(bin_stats.to_string())
         except Exception as e:
@@ -116,15 +116,47 @@ def analyse_game_results(
     plt.tight_layout()
     plt.show()
 
-    # ----- Wealth vs info_param scatter -----
-    if len(informed) > 5 and informed["info_param"].notna().any():
-        plt.figure()
-        plt.scatter(informed["info_param"].values, informed["wealth_final"].values)
+    # ----- Wealth vs info_param by strategy type, with best-fit lines -----
+    strategy_scatter_df = df[
+        df["info_param"].notna() &
+        df["wealth_final"].notna() &
+        (df["type"] != "zi")
+    ].copy()
+
+    if not strategy_scatter_df.empty:
+        plt.figure(figsize=(10, 6))
+
+        for ttype, sub in strategy_scatter_df.groupby("type"):
+            x = sub["info_param"].to_numpy(dtype=float)
+            y = sub["wealth_final"].to_numpy(dtype=float)
+
+            # Scatter points for this strategy type
+            scatter = plt.scatter(x, y, alpha=0.7, label=ttype)
+
+            # Only fit a line if there are enough distinct x values
+            if len(sub) >= 2 and np.unique(x).size >= 2:
+                slope, intercept = np.polyfit(x, y, 1)
+                x_line = np.linspace(x.min(), x.max(), 100)
+                y_line = slope * x_line + intercept
+
+                # Use the same colour as the scatter points
+                plt.plot(x_line, y_line, color=scatter.get_facecolor()[0])
+
+                print(
+                    f"Best-fit line for {ttype}: "
+                    f"wealth_final = {slope:.4f} * info_param + {intercept:.4f}"
+                )
+            else:
+                print(f"Not enough variation to fit line for strategy type: {ttype}")
+
         plt.xlabel("info_param (noise sigma)")
-        plt.ylabel("Final wealth")
-        plt.title(f"{title_prefix}Non-ZI: Wealth vs info_param")
+        plt.ylabel("Terminal wealth")
+        plt.title(f"{title_prefix}Terminal Wealth vs info_param by Strategy Type")
+        plt.legend(title="Strategy Type")
         plt.tight_layout()
         plt.show()
+    else:
+        print("\n(No sufficient non-ZI data to plot wealth vs info_param by strategy type.)")
 
     # ----- Evolutionary composition plot -----
     if generation_counts_df is not None and not generation_counts_df.empty:
@@ -134,6 +166,9 @@ def analyse_game_results(
             "utility_maximiser",
             "contrarian",
             "adapt_sig",
+            "threshold_signal",
+            "inventory_aware_utility",
+            "patient_signal",
         ]
 
         available_columns = [col for col in strategy_columns if col in generation_counts_df.columns]

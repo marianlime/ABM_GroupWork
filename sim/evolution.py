@@ -12,6 +12,9 @@ STRATEGY_ORDER = [
     "utility_maximiser",
     "contrarian",
     "adapt_sig",
+    "threshold_signal",
+    "inventory_aware_utility",
+    "patient_signal",
 ]
 
 
