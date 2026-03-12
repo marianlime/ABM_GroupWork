@@ -36,7 +36,7 @@ def zero_intelligence(signal: float, cash: float, shares: float, value: float) -
         eps = 1e-6
         quantity = round(random.uniform(eps, max_qty), 6)
     else:
-        quantity = round(random.uniform(1, shares), 2) if shares >= 1 else shares
+        quantity = round(random.uniform(0, shares), 2) if shares >= 0 else shares
 
     return {"Price": price, "Quantity": quantity,
             "Buy": 1.0 if action == "buy" else 0.0,
