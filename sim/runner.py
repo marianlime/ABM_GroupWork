@@ -4,8 +4,9 @@ from datetime import datetime, timezone
 
 
 def play_game(
+    # --- Connection ---
+    con,
     # --- Population ---
-    DB_PATH,
     population_spec: list[dict],
     # --- Run / Market ---
     n_rounds: int,
@@ -41,7 +42,6 @@ def play_game(
 ):
     # Create one Game instance for this run / generation.
     current_game = Game(
-        DB_PATH=DB_PATH,
         population_spec=population_spec,
         n_rounds=n_rounds,
         total_initial_shares=total_initial_shares,
@@ -71,7 +71,7 @@ def play_game(
     )
 
     # Persist the initial population state before any rounds are played.
-    insert_agent_population(DB_PATH, run_id, current_game.agents)
+    insert_agent_population(con, run_id, current_game.agents)
 
     try:
         # Run the market for all rounds in this game.
@@ -85,8 +85,6 @@ def play_game(
                 current_game.update_portfolio(trade)
 
             current_game.current_round += 1
-            run_progress = (current_game.current_round / n_rounds) * 100.0
-            update_run_progress(DB_PATH, run_id, run_progress, run_status="RUNNING")
 
         # Compute terminal wealth for each agent after the final round.
         final_score = []
@@ -95,12 +93,12 @@ def play_game(
 
     except Exception:
         failed_progress = (current_game.current_round / n_rounds) * 100.0
-        update_run_progress(DB_PATH, run_id, run_progress=failed_progress, run_status="FAILED")
+        update_run_progress(con, run_id, run_progress=failed_progress, run_status="FAILED")
         raise
 
     completion_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     update_run_progress(
-        DB_PATH,
+        con,
         run_id,
         100.0,
         run_status="COMPLETED",

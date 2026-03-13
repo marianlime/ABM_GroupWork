@@ -1,4 +1,4 @@
-from .noise_signal import assign_noise_parameter_set, signal_generator
+from .noise_signal import assign_noise_parameter_set
 from .trader import Trader
 from .market import clear_market
 import hashlib
@@ -14,7 +14,6 @@ def _noise_seed_from_run_id(run_id: str) -> int:
 class Game:
     def __init__(
         self,
-        DB_PATH,
         population_spec: list[dict],
         # --- Run / Market ---
         n_rounds: int,
@@ -48,8 +47,6 @@ class Game:
         fundamental_path=None,
         seed=None
     ):
-        self.DB_PATH = DB_PATH
-
         self.current_round = 0
         self.agents = {}
 
@@ -148,6 +145,89 @@ class Game:
                 trader_type=trader_type
             )
 
+        # Pre-cache informed agent IDs and their noise parameters so signal
+        # generation can be vectorised across all informed agents in one numpy
+        # call per round instead of N individual calls.
+        self._informed_agent_ids = [
+            aid for aid, agent in self.agents.items() if agent.trader_type != "zi"
+        ]
+        self._informed_noise_params = np.array(
+            [self.agents[aid].info_param for aid in self._informed_agent_ids],
+            dtype=float
+        )
+
+        # Pre-cache ZI agent IDs for the same reason — batch order generation.
+        self._zi_agent_ids = [
+            aid for aid, agent in self.agents.items() if agent.trader_type == "zi"
+        ]
+
+    def _batch_zi_orders(self, value: float) -> dict:
+        """
+        Generate Zero-Intelligence orders for all ZI agents in one vectorised
+        batch, replacing 500 individual Python+numpy calls with 4 numpy calls.
+
+        Returns {agent_id: order_dict | None} where None means hold.
+        """
+        if not self._zi_agent_ids:
+            return {}
+
+        n = len(self._zi_agent_ids)
+        zi_cash   = np.array([self.agents[aid].cash   for aid in self._zi_agent_ids])
+        zi_shares = np.array([self.agents[aid].shares for aid in self._zi_agent_ids])
+
+        # Prices: Normal(value, value * 0.2), clipped to minimum 0.01
+        prices = np.maximum(
+            np.round(np.random.normal(value, value * 0.2, n), 2),
+            0.01
+        )
+
+        # Feasibility per agent
+        can_buy  = (zi_cash > 0) & (value > 0)
+        can_sell = zi_shares > 0
+
+        # 50/50 random action for agents that can do both
+        rand = np.random.random(n) < 0.5
+        action_buy  = (can_buy & ~can_sell) | (can_buy & can_sell & rand)
+        action_sell = (~can_buy & can_sell) | (can_buy & can_sell & ~rand)
+
+        # Quantities
+        eps = 1e-6
+        max_buy_qty = np.where(prices > 0, zi_cash / prices, 0.0)
+        action_buy  = action_buy & (max_buy_qty > 0)
+
+        u_buy   = np.random.uniform(0, 1, n)
+        buy_qty = np.where(
+            max_buy_qty > eps,
+            np.round(eps + u_buy * (max_buy_qty - eps), 6),
+            0.0
+        )
+        action_buy = action_buy & (buy_qty > 0)
+
+        u_sell   = np.random.uniform(0, 1, n)
+        sell_qty = np.where(
+            zi_shares > eps,
+            np.round(eps + u_sell * (zi_shares - eps), 6),
+            0.0
+        )
+        action_sell = action_sell & (sell_qty > 0)
+
+        # Build result dict
+        orders = {}
+        for i, aid in enumerate(self._zi_agent_ids):
+            if action_buy[i]:
+                orders[aid] = {
+                    "Price": float(prices[i]), "Quantity": float(buy_qty[i]),
+                    "Buy": 1.0, "Sell": 0.0, "Hold": 0.0, "agent_id": aid,
+                }
+            elif action_sell[i]:
+                orders[aid] = {
+                    "Price": float(prices[i]), "Quantity": float(sell_qty[i]),
+                    "Buy": 0.0, "Sell": 1.0, "Hold": 0.0, "agent_id": aid,
+                }
+            else:
+                orders[aid] = None  # hold
+        return orders
+
     def gather_orders_and_clear(self, current_round):
 
         agent_round_records = {}
@@ -161,6 +241,30 @@ class Game:
 
         S_next = float(self.fundamental_path[current_round + 1])
         value = float(self.fundamental_path[current_round])
+        _value_safe = max(value, 1e-12)
+        _true_ratio = S_next / _value_safe
+
+        # Vectorised signal generation — one numpy call for all informed agents.
+        if self._informed_agent_ids:
+            if self.signal_noise_distribution == 'lognormal':
+                _multipliers = np.exp(
+                    np.random.normal(self.bias, self._informed_noise_params)
+                )
+            elif self.signal_noise_distribution == 'uniform':
+                _lows = np.maximum(1.0 - self._informed_noise_params, 1e-6)
+                _highs = 1.0 + self._informed_noise_params
+                _u = np.random.uniform(0, 1, len(self._informed_noise_params))
+                _multipliers = _lows + _u * (_highs - _lows)
+            else:
+                raise ValueError(f"Unknown noise_distribution: {self.signal_noise_distribution}")
+            _informed_signals = dict(
+                zip(self._informed_agent_ids, (S_next * _multipliers) / _value_safe)
+            )
+        else:
+            _informed_signals = {}
+
+        # Vectorised ZI order generation — replaces 500 individual strategy calls.
+        _zi_orders = self._batch_zi_orders(value)
 
         for agent_id, player in self.agents.items():
 
@@ -170,18 +274,11 @@ class Game:
             if player.trader_type == "zi":
                 signal = 1.0
                 signal_error = 0.0
+                strat_order = _zi_orders[agent_id]
             else:
-                raw_signal = signal_generator(
-                    noise_parameter=player.info_param,
-                    S_next=S_next,
-                    bias=self.bias,
-                    signal_generator_noise_distribution=self.signal_noise_distribution
-                )
-                signal = raw_signal / max(value, 1e-12)
-                true_ratio = S_next / max(value, 1e-12)
-                signal_error = float(signal - true_ratio)
-
-            strat_order = player.place_order(signal=signal, value=value)
+                signal = float(_informed_signals[agent_id])
+                signal_error = float(signal - _true_ratio)
+                strat_order = player.place_order(signal=signal, value=value)
 
             if strat_order is None or strat_order.get("Hold", 0.0) == 1.0:
                 action = "hold"

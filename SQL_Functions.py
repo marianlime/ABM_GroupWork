@@ -1,35 +1,31 @@
-import duckdb
 import json
 
 
-
-def insert_run_row( DB_PATH,
-                    run_id,
-                    experiment_name, 
-                    experiment_type, 
-                    creation_time, 
-                    completion_time, 
-                    run_notes, 
-                    n_rounds, 
-                    fundamental_source, 
-                    run_status, 
-                    run_progress, 
-                    py_vers, 
-                    code_vers,
-                    n_agents,
-                    total_starting_cash,
-                    total_starting_shares,
-                    market_mechanism,
-                    pricing_rule,
-                    rationing_rule,
-                    tie_break_rule,
-                    transaction_cost_rate,
-                    noise_parameter_distribution_type,
-                    distribution_data,
-                    signal_generator_noise_distribution,
-                    bias):
-    con = duckdb.connect(DB_PATH)
-
+def insert_run_row(con,
+                   run_id,
+                   experiment_name,
+                   experiment_type,
+                   creation_time,
+                   completion_time,
+                   run_notes,
+                   n_rounds,
+                   fundamental_source,
+                   run_status,
+                   run_progress,
+                   py_vers,
+                   code_vers,
+                   n_agents,
+                   total_starting_cash,
+                   total_starting_shares,
+                   market_mechanism,
+                   pricing_rule,
+                   rationing_rule,
+                   tie_break_rule,
+                   transaction_cost_rate,
+                   noise_parameter_distribution_type,
+                   distribution_data,
+                   signal_generator_noise_distribution,
+                   bias):
     con.execute("""
         INSERT INTO runs VALUES (
             ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
@@ -56,59 +52,33 @@ def insert_run_row( DB_PATH,
         tie_break_rule,
         transaction_cost_rate,
         noise_parameter_distribution_type,
-        json.dumps(distribution_data),   # JSON column
+        json.dumps(distribution_data),
         signal_generator_noise_distribution,
         bias
     ])
 
-    con.close()
-
     print(f"Run {run_id} inserted into DuckDB")
 
-def insert_gbm_config_row(DB_PATH, run_id, S0, volatility, drift, seed):
-    con = duckdb.connect(DB_PATH)
 
+def insert_gbm_config_row(con, run_id, S0, volatility, drift, seed):
     con.execute(
         """INSERT INTO gbm_config VALUES (?, ?, ?, ?, ?)""",
-        [
-            run_id,
-            S0,
-            drift,
-            volatility,
-            seed
-        ]
+        [run_id, S0, drift, volatility, seed]
     )
-
-    con.close()
-
     print(f"GBM Configuration inserted into DuckDB")
 
 
-def insert_hist_config_row(DB_PATH,run_id, ticker, interval, start_date, end_date, price_col, auto_adjust):
-    con = duckdb.connect(DB_PATH)
-
+def insert_hist_config_row(con, run_id, ticker, interval, start_date, end_date, price_col, auto_adjust):
     con.execute("""
         INSERT INTO hist_config VALUES (
             ?, ?, ?, ?, ?, ?, ?
         )
-    """, [
-        run_id,
-        ticker,
-        interval,
-        start_date,
-        end_date,
-        price_col,
-        auto_adjust
-    ])
-
-    con.close()
+    """, [run_id, ticker, interval, start_date, end_date, price_col, auto_adjust])
 
     print(f"Historical Configuration inserted into DuckDB")
 
 
-def insert_fundamental_series(DB_PATH, run_id, fundamental_series):
-    con = duckdb.connect(DB_PATH)
-
+def insert_fundamental_series(con, run_id, fundamental_series):
     data = []
     for r, p in fundamental_series:
         if isinstance(p, tuple):
@@ -122,38 +92,31 @@ def insert_fundamental_series(DB_PATH, run_id, fundamental_series):
         """,
         data
     )
-
-    con.close()
     print(f"Fundamental series inserted for run {run_id}")
 
-def insert_agent_population(DB_PATH, run_id, agents):
-    con = duckdb.connect(DB_PATH)
 
+def insert_agent_population(con, run_id, agents):
     data = []
-
     for agent_id, agent in agents.items():
         group_label = "noise" if agent.trader_type == "zi" else "informed"
         data.append((
-                    run_id,
-                    int(agent_id),
-                    str(agent.trader_type),
-                    float(agent.info_param),
-                    group_label,
-                    float(agent.cash),
-                    float(agent.shares)
-                    ))
+            run_id,
+            int(agent_id),
+            str(agent.trader_type),
+            float(agent.info_param),
+            group_label,
+            float(agent.cash),
+            float(agent.shares)
+        ))
 
     con.executemany("""INSERT INTO agent_population
                     (run_id, agent_id, strategy_type, noise_parameter, group_label, initial_cash, initial_shares)
                     VALUES (?,?,?,?,?,?,?)""", data)
 
-    con.close()
+    print(f"{len(data)} agents inserted into agent_population")
 
-    print(f"{len(data)} agents inserted into agent_population")    
 
-def insert_agent_round_rows(DB_PATH, records):
-    con = duckdb.connect(DB_PATH)
-
+def insert_agent_round_rows(con, records):
     data = []
     for r in records:
         data.append((
@@ -201,11 +164,8 @@ def insert_agent_round_rows(DB_PATH, records):
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, data)
 
-    con.close()
 
-def update_run_progress(DB_PATH, run_id, run_progress, run_status=None, completion_time = None):
-    con = duckdb.connect(DB_PATH)
-
+def update_run_progress(con, run_id, run_progress, run_status=None, completion_time=None):
     if run_status is not None and completion_time is not None:
         con.execute("""
         UPDATE runs
@@ -226,12 +186,9 @@ def update_run_progress(DB_PATH, run_id, run_progress, run_status=None, completi
             SET run_progress = ?
             WHERE run_id = ?
         """, [float(run_progress), run_id])
-        
-    con.close()
 
-def insert_market_round_rows(DB_PATH, records):
-    con = duckdb.connect(DB_PATH)
 
+def insert_market_round_rows(con, records):
     data = []
     for r in records:
         data.append((
@@ -274,5 +231,3 @@ def insert_market_round_rows(DB_PATH, records):
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, data)
-
-    con.close()

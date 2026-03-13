@@ -6,6 +6,7 @@ import random
 from datetime import datetime, timezone
 
 #---------- Third-Party Libraries ------------
+import duckdb
 import ulid
 import pandas as pd
 
@@ -107,7 +108,7 @@ def generate_code_Vers() -> str:
 # EVOLUTION / EXPERIMENT DATA
 # -----------------------------
 
-n_generations = 10
+n_generations = 50
 
 algorithm_name = "truncation"
 algorithm_params = {
@@ -149,7 +150,7 @@ population_spec = initial_population_from_counts(strategy_counts)
 experiment_name = "Experiment Name"
 experiment_type = "A sub section for the experiment"
 run_notes = "Notes for the run"
-n_rounds = 10
+n_rounds = 50
 fundamental_source = "Historical"   # ["GBM", "Historical"]
 
 # Version data
@@ -216,6 +217,21 @@ else:
 signal_generator_noise_distribution = "lognormal"   # [lognormal, uniform]
 bias = 0.0
 
+# Pre-fetch historical data once so yfinance is not called on every generation.
+# GBM paths are generated fresh per generation (different seeds) and need no cache.
+if fundamental_source == "Historical":
+    ticker = "AAPL"
+    interval = "1d"
+    start_date = "2024-01-01"
+    end_date = compute_end_date(start_date, n_rounds, interval)
+    price_col = "Close"
+    auto_adjust = True
+    _cached_fundamental_path = simulate_from_yfinance(
+        ticker, start_date, n_rounds, interval, price_col, auto_adjust
+    )
+else:
+    _cached_fundamental_path = None
+
 # Store composition history for plotting / inspection later
 generation_counts = []
 
@@ -224,170 +240,163 @@ last_game = None
 last_final_score = None
 
 # ----------------------------
-# Evolutionary loop
+# Evolutionary loop — one shared DB connection for the entire run
 # ----------------------------
 
-for generation in range(n_generations):
-    run_id = generate_ULID()
-    creation_time = generate_time()
-    completion_time = None
+con = duckdb.connect(DB_PATH)
+try:
+    for generation in range(n_generations):
+        run_id = generate_ULID()
+        creation_time = generate_time()
+        completion_time = None
 
-    # Each generation is stored as its own run in the DB.
-    run_status = "STARTED"
-    run_progress = 0
+        # Each generation is stored as its own run in the DB.
+        run_status = "STARTED"
+        run_progress = 0
 
-    # Record composition at the start of the generation.
-    current_counts = count_strategies(population_spec)
-    generation_counts.append({
-        "generation": generation,
-        **current_counts
-    })
+        # Record composition at the start of the generation.
+        current_counts = count_strategies(population_spec)
+        generation_counts.append({
+            "generation": generation,
+            **current_counts
+        })
 
-    print(f"Generation {generation} | Run {run_id} created | Composition: {current_counts}")
+        print(f"Generation {generation} | Run {run_id} created | Composition: {current_counts}")
 
-    insert_run_row(
-        DB_PATH,
-        run_id,
-        experiment_name,
-        f"{experiment_type} | generation_{generation}",
-        creation_time,
-        completion_time,
-        run_notes,
-        n_rounds,
-        fundamental_source,
-        run_status,
-        run_progress,
-        py_vers,
-        code_vers,
-        n_agents,
-        total_initial_cash,
-        total_initial_shares,
-        market_mechanism,
-        pricing_rule,
-        rationing_rule,
-        tie_break_rule,
-        transaction_cost_rate,
-        noise_parameter_distribution_type,
-        distribution_data,
-        signal_generator_noise_distribution,
-        bias
-    )
-
-    # ----------------------------
-    # Generate a fresh fundamental path for this generation
-    # ----------------------------
-
-    if fundamental_source == "GBM":
-        S0 = 100
-        volatility = 0.2
-        drift = 0.01
-
-        # Use a generation-specific seed so paths differ across generations
-        seed = f"gbm_generation_{generation}_seed_{experiment_seed}"
-
-        insert_gbm_config_row(DB_PATH, run_id, S0, volatility, drift, seed)
-
-        fundamental_path = simulate_gbm(S0, volatility, drift, n_rounds, seed)
-        fundamental_series = tuple(enumerate(fundamental_path))
-        insert_fundamental_series(DB_PATH, run_id, fundamental_series)
-
-        # Reset unused historical fields
-        ticker = None
-        interval = None
-        start_date = None
-        price_col = None
-        auto_adjust = None
-
-    elif fundamental_source == "Historical":
-        ticker = "AAPL"
-        interval = "1d"
-        start_date = "2024-01-01"
-        end_date = compute_end_date(start_date, n_rounds, interval)
-        price_col = "Close"
-        auto_adjust = True
-        seed = None
-
-        insert_hist_config_row(
-            DB_PATH,
+        insert_run_row(
+            con,
             run_id,
-            ticker,
-            interval,
-            start_date,
-            end_date,
-            price_col,
-            auto_adjust
-        )
-
-        fundamental_path = simulate_from_yfinance(
-            ticker,
-            start_date,
+            experiment_name,
+            f"{experiment_type} | generation_{generation}",
+            creation_time,
+            completion_time,
+            run_notes,
             n_rounds,
+            fundamental_source,
+            run_status,
+            run_progress,
+            py_vers,
+            code_vers,
+            n_agents,
+            total_initial_cash,
+            total_initial_shares,
+            market_mechanism,
+            pricing_rule,
+            rationing_rule,
+            tie_break_rule,
+            transaction_cost_rate,
+            noise_parameter_distribution_type,
+            distribution_data,
+            signal_generator_noise_distribution,
+            bias
+        )
+
+        # ----------------------------
+        # Generate a fresh fundamental path for this generation
+        # ----------------------------
+
+        if fundamental_source == "GBM":
+            S0 = 100
+            volatility = 0.2
+            drift = 0.01
+
+            # Use a generation-specific seed so paths differ across generations
+            seed = f"gbm_generation_{generation}_seed_{experiment_seed}"
+
+            insert_gbm_config_row(con, run_id, S0, volatility, drift, seed)
+
+            fundamental_path = simulate_gbm(S0, volatility, drift, n_rounds, seed)
+            fundamental_series = tuple(enumerate(fundamental_path))
+            insert_fundamental_series(con, run_id, fundamental_series)
+
+            # Reset unused historical fields
+            ticker = None
+            interval = None
+            start_date = None
+            price_col = None
+            auto_adjust = None
+
+        elif fundamental_source == "Historical":
+            seed = None
+
+            insert_hist_config_row(
+                con,
+                run_id,
+                ticker,
+                interval,
+                start_date,
+                end_date,
+                price_col,
+                auto_adjust
+            )
+
+            # Reuse the path fetched once before the loop — no repeated network call.
+            fundamental_path = _cached_fundamental_path
+            fundamental_series = tuple(enumerate(fundamental_path))
+            insert_fundamental_series(con, run_id, fundamental_series)
+
+            # Reset unused GBM fields
+            S0 = None
+            volatility = None
+            drift = None
+
+        else:
+            raise ValueError("Error")
+
+        # ----------------------------
+        # Run this generation's game
+        # ----------------------------
+
+        final_score, g = play_game(
+            con,
+            population_spec,
+            n_rounds,
+            total_initial_shares,
+            total_initial_cash,
+            cash_to_share_ratio,
+            run_id,
+            market_mechanism,
+            pricing_rule,
+            rationing_rule,
+            tie_break_rule,
+            transaction_cost_rate,
+            noise_parameter_distribution_type,
+            distribution_data,
+            signal_generator_noise_distribution,
+            bias,
+            fundamental_source,
+            S0,
+            volatility,
+            drift,
+            ticker,
             interval,
+            start_date,
             price_col,
-            auto_adjust
+            auto_adjust,
+            fundamental_path,
+            seed
         )
-        fundamental_series = tuple(enumerate(fundamental_path))
-        insert_fundamental_series(DB_PATH, run_id, fundamental_series)
 
-        # Reset unused GBM fields
-        S0 = None
-        volatility = None
-        drift = None
+        # Persist outputs for this generation
+        insert_market_round_rows(con, g.market_round_records)
+        insert_agent_round_rows(con, g.agent_round_records)
 
-    else:
-        raise ValueError("Error")
+        # Keep references to the most recent game
+        last_game = g
+        last_final_score = final_score
 
-    # ----------------------------
-    # Run this generation's game
-    # ----------------------------
+        # Evolve into the next generation, unless this is the final generation.
+        if generation < n_generations - 1:
+            population_spec = evolve_population(
+                algorithm_name=algorithm_name,
+                final_score=final_score,
+                agents=g.agents,
+                algorithm_params=algorithm_params,
+                rng=rng
+            )
 
-    final_score, g = play_game(
-        DB_PATH,
-        population_spec,
-        n_rounds,
-        total_initial_shares,
-        total_initial_cash,
-        cash_to_share_ratio,
-        run_id,
-        market_mechanism,
-        pricing_rule,
-        rationing_rule,
-        tie_break_rule,
-        transaction_cost_rate,
-        noise_parameter_distribution_type,
-        distribution_data,
-        signal_generator_noise_distribution,
-        bias,
-        fundamental_source,
-        S0,
-        volatility,
-        drift,
-        ticker,
-        interval,
-        start_date,
-        price_col,
-        auto_adjust,
-        fundamental_path,
-        seed
-    )
-
-    # Persist outputs for this generation
-    insert_market_round_rows(DB_PATH, g.market_round_records)
-    insert_agent_round_rows(DB_PATH, g.agent_round_records)
-
-    # Keep references to the most recent game
-    last_game = g
-    last_final_score = final_score
-
-    # Evolve into the next generation, unless this is the final generation.
-    if generation < n_generations - 1:
-        population_spec = evolve_population(
-            algorithm_name=algorithm_name,
-            final_score=final_score,
-            agents=g.agents,
-            algorithm_params=algorithm_params,
-            rng=rng
-        )
+finally:
+    con.close()
 
 
 # ----------------------------
