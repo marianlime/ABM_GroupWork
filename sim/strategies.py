@@ -36,7 +36,8 @@ def zero_intelligence(signal: float, cash: float, shares: float, value: float) -
         eps = 1e-6
         quantity = round(random.uniform(eps, max_qty), 6)
     else:
-        quantity = round(random.uniform(0, shares), 2) if shares >= 0 else shares
+        eps = 1e-6
+        quantity = round(random.uniform(eps, max(shares, eps)), 6)
 
     return {"Price": price, "Quantity": quantity,
             "Buy": 1.0 if action == "buy" else 0.0,
@@ -246,7 +247,7 @@ def contrarian(signal: float, cash: float, shares: float, value: float,
             "Hold": 0.0}
 
 
-def adapted_signal_following(signal: float, cash: float, shares: float, value: float, aggression: float = None):
+def adapted_signal_following(signal: float, cash: float, shares: float, value: float):
     price_range = 0.2
     low = value * (1 - price_range)
     high = value * (1 + price_range)

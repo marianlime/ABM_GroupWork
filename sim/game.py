@@ -1,7 +1,14 @@
 from .noise_signal import assign_noise_parameter_set, signal_generator
 from .trader import Trader
 from .market import clear_market
+import hashlib
 import numpy as np
+
+
+def _noise_seed_from_run_id(run_id: str) -> int:
+    """Derive a stable integer seed from the run ULID so noise parameter
+    assignment is reproducible for a given run."""
+    return int(hashlib.sha256(f"noise_{run_id}".encode()).hexdigest()[:16], 16)
 
 
 class Game:
@@ -104,10 +111,12 @@ class Game:
         self.order_history = {}
         self.price_history = {}
 
+        noise_seed = _noise_seed_from_run_id(self.run_id) if self.run_id else None
         self.noise_parameter_set = assign_noise_parameter_set(
             n_agents=self.n_agents,
             noise_parameter_distribution_type=self.noise_parameter_distribution_type,
-            distribution_data=self.distribution_data
+            distribution_data=self.distribution_data,
+            seed=noise_seed
         )
 
         cash_per_agent = self.total_initial_cash / self.n_agents

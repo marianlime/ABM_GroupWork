@@ -53,13 +53,9 @@ def test_assign_noise_skewed_positive():
 
 
 def test_assign_noise_uniform_reproducible_with_seed():
-    # Fix random seed so the random draw is reproducible
-    np.random.seed(42)
-    arr1 = assign_noise_parameter_set(10, "uniform", {"low": 0.0, "high": 0.5})
-
-    # Reset the seed and generate again
-    np.random.seed(42)
-    arr2 = assign_noise_parameter_set(10, "uniform", {"low":0.0, "high": 0.5})
+    # Pass the same explicit seed both times — results must be identical
+    arr1 = assign_noise_parameter_set(10, "uniform", {"low": 0.0, "high": 0.5}, seed=42)
+    arr2 = assign_noise_parameter_set(10, "uniform", {"low": 0.0, "high": 0.5}, seed=42)
 
     # Both arrays should be identical because the seed is the same
     assert np.allclose(arr1, arr2)

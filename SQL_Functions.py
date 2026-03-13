@@ -1,12 +1,5 @@
 import duckdb
 import json
-import sys
-import ulid
-import pandas as pd
-import yfinance as yf
-import subprocess
-from datetime import datetime, timezone
-from typing import Optional
 
 
 
@@ -72,7 +65,7 @@ def insert_run_row( DB_PATH,
 
     print(f"Run {run_id} inserted into DuckDB")
 
-def insert_gbm_config_row(DB_PATH, run_id, S0, drift, volatility, seed):
+def insert_gbm_config_row(DB_PATH, run_id, S0, volatility, drift, seed):
     con = duckdb.connect(DB_PATH)
 
     con.execute(
@@ -139,12 +132,13 @@ def insert_agent_population(DB_PATH, run_id, agents):
     data = []
 
     for agent_id, agent in agents.items():
+        group_label = "noise" if agent.trader_type == "zi" else "informed"
         data.append((
                     run_id,
                     int(agent_id),
                     str(agent.trader_type),
                     float(agent.info_param),
-                    str(agent.trader_type),
+                    group_label,
                     float(agent.cash),
                     float(agent.shares)
                     ))
@@ -156,68 +150,6 @@ def insert_agent_population(DB_PATH, run_id, agents):
     con.close()
 
     print(f"{len(data)} agents inserted into agent_population")    
-
-def insert_market_round(
-    DB_PATH,
-    run_id,
-    round_number,
-    p_t,
-    best_bid,
-    best_ask,
-    volume,
-    n_trades,
-    demand_at_p,
-    supply_at_p,
-    n_active_buyers,
-    n_active_sellers,
-    n_active_total,
-    bid_depth_total,
-    ask_depth_total,
-    price_levels_bid,
-    price_levels_ask
-):
-    con = duckdb.connect(DB_PATH)
-
-    con.execute("""
-        INSERT INTO market_round (
-            run_id,
-            round_number,
-            p_t,
-            best_bid,
-            best_ask,
-            volume,
-            n_trades,
-            demand_at_p,
-            supply_at_p,
-            n_active_buyers,
-            n_active_sellers,
-            n_active_total,
-            bid_depth_total,
-            ask_depth_total,
-            price_levels_bid,
-            price_levels_ask
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, [
-        run_id,
-        round_number,
-        p_t,
-        best_bid,
-        best_ask,
-        volume,
-        n_trades,
-        demand_at_p,
-        supply_at_p,
-        n_active_buyers,
-        n_active_sellers,
-        n_active_total,
-        bid_depth_total,
-        ask_depth_total,
-        price_levels_bid,
-        price_levels_ask
-    ])
-
-import duckdb
 
 def insert_agent_round_rows(DB_PATH, records):
     con = duckdb.connect(DB_PATH)
@@ -276,7 +208,6 @@ def update_run_progress(DB_PATH, run_id, run_progress, run_status=None, completi
 
     if run_status is not None and completion_time is not None:
         con.execute("""
-
         UPDATE runs
         SET run_progress = ?, run_status = ?, completion_time = ?
         WHERE run_id = ?
@@ -288,12 +219,13 @@ def update_run_progress(DB_PATH, run_id, run_progress, run_status=None, completi
             SET run_progress = ?, run_status = ?
             WHERE run_id = ?
         """, [float(run_progress), run_status, run_id])
-    
+
     else:
         con.execute("""
             UPDATE runs
             SET run_progress = ?
-            WHERE run_id = """, [float(run_progress), run_id])
+            WHERE run_id = ?
+        """, [float(run_progress), run_id])
         
     con.close()
 

@@ -1,18 +1,6 @@
 from .game import Game
-import hashlib
 from SQL_Functions import update_run_progress, insert_agent_population
 from datetime import datetime, timezone
-
-
-def seed_to_int(seed) -> int | None:
-    """Accept int/str/None and convert strings into a stable integer seed."""
-    if seed is None:
-        return None
-    if isinstance(seed, int):
-        return seed
-    if isinstance(seed, str):
-        return int(hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16], 16)
-    raise TypeError(f"seed must be int|str|None, got {type(seed)}")
 
 
 def play_game(

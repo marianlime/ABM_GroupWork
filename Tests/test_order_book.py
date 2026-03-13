@@ -3,7 +3,7 @@
 import pytest
 from sim.market import clear_market, allocate_trades
 
-def _action_fills(trades, action):
+def _side_fills(trades, action):
     """Return {agent_id: quantity} for one side of the trades list."""
     return {t['agent_id']: t['quantity'] for t in trades if t['action'] == action}
 
@@ -19,15 +19,15 @@ class TestBasicClearing:
     ]
 
     def test_clearing_price(self):
-        price, _ = clear_market(self.ORDERS, previous_price=99.5)
+        price, _, _ = clear_market(self.ORDERS, previous_price=99.5)
         assert price == 100.0
 
     def test_trades_non_empty(self):
-        _, trades = clear_market(self.ORDERS, previous_price=99.5)
+        _, _, trades = clear_market(self.ORDERS, previous_price=99.5)
         assert len(trades) > 0
 
     def test_both_sides_present(self):
-        _, trades = clear_market(self.ORDERS, previous_price=99.5)
+        _, _, trades = clear_market(self.ORDERS, previous_price=99.5)
         sides = {t['action'] for t in trades}
         assert 'buy' in sides and 'sell' in sides
 
@@ -42,11 +42,11 @@ class TestNoMatch:
     ]
 
     def test_price_is_none(self):
-        price, _ = clear_market(self.ORDERS)
+        price, _, _ = clear_market(self.ORDERS)
         assert price is None
 
     def test_trades_empty(self):
-        _, trades = clear_market(self.ORDERS)
+        _, _, trades = clear_market(self.ORDERS)
         assert trades == []
 
 
@@ -60,15 +60,15 @@ class TestExactMatch:
     ]
 
     def test_clearing_price(self):
-        price, _ = clear_market(self.ORDERS)
+        price, _, _ = clear_market(self.ORDERS)
         assert price == 50.0
 
     def test_buyer_fully_filled(self):
-        _, trades = clear_market(self.ORDERS)
+        _, _, trades = clear_market(self.ORDERS)
         assert _side_fills(trades, 'buy')['A'] == 5
 
     def test_seller_fully_filled(self):
-        _, trades = clear_market(self.ORDERS)
+        _, _, trades = clear_market(self.ORDERS)
         assert _side_fills(trades, 'sell')['B'] == 5
 
 
@@ -77,17 +77,17 @@ class TestExactMatch:
 class TestEdgeCases:
 
     def test_empty_orders(self):
-        price, trades = clear_market([])
+        price, _, trades = clear_market([])
         assert price is None and trades == []
 
     def test_buys_only(self):
         orders = [{'agent_id': 1, 'price': 100, 'quantity': 5, 'action': 'buy'}]
-        price, _ = clear_market(orders)
+        price, _, _ = clear_market(orders)
         assert price is None
 
     def test_sells_only(self):
         orders = [{'agent_id': 1, 'price': 100, 'quantity': 5, 'action': 'sell'}]
-        price, _ = clear_market(orders)
+        price, _, _ = clear_market(orders)
         assert price is None
 
 
@@ -106,15 +106,15 @@ class TestTieBreaking:
     ]
 
     def test_closest_to_previous_high(self):
-        price, _ = clear_market(self.ORDERS, previous_price=101)
+        price, _, _ = clear_market(self.ORDERS, previous_price=101)
         assert price == 101.0
 
     def test_closest_to_previous_low(self):
-        price, _ = clear_market(self.ORDERS, previous_price=100)
+        price, _, _ = clear_market(self.ORDERS, previous_price=100)
         assert price == 100.0
 
     def test_midpoint_when_no_previous(self):
-        price, _ = clear_market(self.ORDERS, previous_price=None)
+        price, _, _ = clear_market(self.ORDERS, previous_price=None)
         assert price == 100.5
 
 

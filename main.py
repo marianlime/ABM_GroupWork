@@ -42,7 +42,7 @@ DB_PATH = "testdataset.duckdb"
 if not os.path.exists(DB_PATH):
     create_database(DB_PATH)
 
-# INITIAL PARAMETER SETS DO NOT CHANGE
+# Fundamental-path variables — set inside the generation loop based on fundamental_source
 S0 = None
 volatility = None
 drift = None
@@ -54,7 +54,6 @@ price_col = None
 auto_adjust = None
 fundamental_path = None
 completion_time = None
-# INITIAL PARAMETER SETS DO NOT CHANGE
 
 
 def compute_end_date(start_date, n_rounds, interval):
@@ -398,9 +397,6 @@ for generation in range(n_generations):
 generation_counts_df = pd.DataFrame(generation_counts)
 print("\nGeneration strategy counts:")
 print(generation_counts_df)
-
-# Analyse the final generation only, to keep changes minimal.
-generation_counts_df = pd.DataFrame(generation_counts)
 
 results_df = analyse_game_results(
     last_game,

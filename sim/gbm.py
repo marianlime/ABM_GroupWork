@@ -64,8 +64,6 @@ def simulate_from_yfinance(ticker: str, start_date: str, n_rounds: int, interval
         raise ValueError(f"Not enough data for '{ticker}'. Need {n_rounds+1} points, got {prices.size}") #Raises value error
     
     S_t = prices[:(n_rounds + 1)].copy() #Builds the historical path
-    Z = np.zeros(n_rounds + 1, dtype = float) #Zeros array that stores the initial log price and shock path - Z_t = log(S_t)
-    Z[1:] = np.diff(np.log(S_t)) # Builds and stores the historical log returns path
-    return S_t 
+    return S_t
 #---------------------------
 
