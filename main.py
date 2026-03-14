@@ -12,7 +12,14 @@ import pandas as pd
 
 #------------- Project Modules ---------------
 from database_creation import create_database
-from analysis import analyse_game_results
+from analysis import (
+    analyse_game_results,
+    compute_generation_mape,
+    compute_gini,
+    compute_no_clear_rate,
+    compute_strategy_mean_wealth,
+    compute_strategy_mean_info_param,
+)
 
 from sim.gbm import (
     simulate_gbm,
@@ -21,6 +28,7 @@ from sim.gbm import (
 
 from sim.runner import play_game
 from sim.evolution import (
+    STRATEGY_ORDER,
     initial_population_from_counts,
     evolve_population,
     count_strategies,
@@ -114,6 +122,9 @@ algorithm_name = "truncation"
 algorithm_params = {
     "top_n": 10,
     "bottom_k": 10,
+    "mutation_rate": 0.02,           # probability per agent of random strategy-type switch
+    "info_param_mutation_std": 0.01, # Gaussian std for info_param perturbation
+    "info_param_bounds": (0.0, 1.0), # clamp evolved info_param to this range
 }
 
 experiment_seed = 42
@@ -123,16 +134,18 @@ rng = random.Random(experiment_seed)
 # RUN DATA
 # -----------------------------
 
-n_zi_agents = 500
-n_signal_following_agents = 15
-n_utility_maximiser_agents = 15
-n_contrarian_agents = 15
-n_adapt_sig_agents = 15
-n_threshold_signal_agents = 0
-n_inventory_aware_utility_agents = 0
-n_patient_signal_agents = 0
+# Set a strategy count to None to disable it entirely (excluded from the run and from mutation).
+# ZI agents are fixed: their count never changes across generations and they do not participate in evolution.
+n_zi_agents = 100
+n_signal_following_agents = 10
+n_utility_maximiser_agents = 10
+n_contrarian_agents = 10
+n_adapt_sig_agents = 10
+n_threshold_signal_agents = 10
+n_inventory_aware_utility_agents = 10
+n_patient_signal_agents = 10
 
-strategy_counts = {
+_raw_counts = {
     "zi": n_zi_agents,
     "signal_following": n_signal_following_agents,
     "utility_maximiser": n_utility_maximiser_agents,
@@ -143,6 +156,18 @@ strategy_counts = {
     "patient_signal": n_patient_signal_agents,
 }
 
+# Drop disabled strategies (None) so they can't appear in the population or via mutation.
+strategy_counts = {k: v for k, v in _raw_counts.items() if v is not None}
+
+# ZI count is fixed for the entire run — zi agents never enter or leave via evolution.
+n_zi_fixed = strategy_counts.get("zi", 0)
+
+# Strategies that participate in evolution: active, non-zi, non-zero.
+evolvable_strategies = [
+    s for s in STRATEGY_ORDER
+    if s != "zi" and strategy_counts.get(s, 0) > 0
+]
+
 # Generation 0 population
 population_spec = initial_population_from_counts(strategy_counts)
 
@@ -150,8 +175,8 @@ population_spec = initial_population_from_counts(strategy_counts)
 experiment_name = "Experiment Name"
 experiment_type = "A sub section for the experiment"
 run_notes = "Notes for the run"
-n_rounds = 50
-fundamental_source = "Historical"   # ["GBM", "Historical"]
+n_rounds = 20
+fundamental_source = "GBM"   # ["GBM", "Historical"]
 
 # Version data
 py_vers = generate_py_Vers()
@@ -171,11 +196,11 @@ tie_break_rule = "previous_price_proximity"
 transaction_cost_rate = 0.000
 
 # Noise / signal setup
-noise_parameter_distribution_type = "uniform"  # [uniform, bimodal, skewed, evenly_spaced]
+noise_parameter_distribution_type = "evenly_spaced"  # [uniform, bimodal, skewed, evenly_spaced]
 
 if noise_parameter_distribution_type == "uniform":
     low = 0.0
-    high = 0.4
+    high = 0.5
     distribution_data = {
         "low": low,
         "high": high
@@ -202,8 +227,8 @@ elif noise_parameter_distribution_type == "skewed":
     }
 
 elif noise_parameter_distribution_type == "evenly_spaced":
-    low = 0.05
-    high = 0.1
+    low = 0.0
+    high = 0.5
     distribution_data = {
         "low": low,
         "high": high
@@ -385,15 +410,43 @@ try:
         last_game = g
         last_final_score = final_score
 
+        # ----- Record per-generation metrics into the existing counts entry -----
+        gen_entry = generation_counts[-1]
+        gen_entry["mape"] = compute_generation_mape(g)
+        gen_entry["gini"] = compute_gini(final_score)
+        gen_entry["no_clear_rate"] = compute_no_clear_rate(g)
+        for strategy, wealth in compute_strategy_mean_wealth(final_score, g.agents).items():
+            gen_entry[f"mean_wealth_{strategy}"] = wealth
+        for strategy, ip in compute_strategy_mean_info_param(g.agents).items():
+            gen_entry[f"mean_info_param_{strategy}"] = ip
+
         # Evolve into the next generation, unless this is the final generation.
         if generation < n_generations - 1:
-            population_spec = evolve_population(
+            # ZI agents are fixed — exclude them from the evolutionary pool.
+            evolvable_ids = {aid for aid, agent in g.agents.items() if agent.trader_type != "zi"}
+            evolvable_final_score = [(aid, w) for aid, w in final_score if aid in evolvable_ids]
+            evolvable_agents = {aid: agent for aid, agent in g.agents.items() if aid in evolvable_ids}
+
+            evolved = evolve_population(
                 algorithm_name=algorithm_name,
-                final_score=final_score,
-                agents=g.agents,
-                algorithm_params=algorithm_params,
-                rng=rng
+                final_score=evolvable_final_score,
+                agents=evolvable_agents,
+                algorithm_params={**algorithm_params, "active_strategies": evolvable_strategies},
+                rng=rng,
             )
+
+            # Reconstruct full population: fixed ZI cohort + evolved non-ZI agents.
+            zi_cohort = [{"trader_type": "zi"} for _ in range(n_zi_fixed)]
+            population_spec = zi_cohort + evolved
+
+            # Stop early if the evolvable population has converged to a single strategy.
+            next_counts = count_strategies(population_spec)
+            active_evolvable = sum(1 for s, c in next_counts.items() if s != "zi" and c > 0)
+            if active_evolvable <= 1:
+                dominant = next((s for s, c in next_counts.items() if s != "zi" and c > 0), None)
+                label = f"'{dominant}'" if dominant else "none"
+                print(f"Convergence reached after generation {generation}: evolvable population is {label}. Stopping early.")
+                break
 
 finally:
     con.close()

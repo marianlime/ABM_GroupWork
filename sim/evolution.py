@@ -82,10 +82,36 @@ def rank_agents_by_fitness(final_score, agents) -> list[dict]:
             "agent_id": agent_id,
             "wealth": float(wealth),
             "trader_type": agents[agent_id].trader_type,
+            "info_param": float(agents[agent_id].info_param),
         })
 
     ranked.sort(key=lambda x: x["wealth"], reverse=True)
     return ranked
+
+
+def _make_child(
+    parent: dict,
+    rng: random.Random,
+    mutation_rate: float,
+    info_param_mutation_std: float,
+    info_param_bounds: tuple[float, float],
+    active_strategies: list[str] = STRATEGY_ORDER,
+) -> dict:
+    """
+    Create a child from a parent agent dict.
+    - Inherits trader_type, with `mutation_rate` probability of switching to a random strategy
+      drawn from active_strategies (disabled or fixed strategies are excluded).
+    - Inherits info_param perturbed by Gaussian noise, clamped to info_param_bounds.
+    """
+    trader_type = parent["trader_type"]
+    if rng.random() < mutation_rate:
+        trader_type = rng.choice(active_strategies)
+
+    lo, hi = info_param_bounds
+    info_param = parent["info_param"] + rng.gauss(0.0, info_param_mutation_std)
+    info_param = max(lo, min(hi, info_param))
+
+    return {"trader_type": trader_type, "info_param": info_param}
 
 
 def evolve_truncation(
@@ -94,6 +120,10 @@ def evolve_truncation(
     top_n: int,
     bottom_k: int,
     rng: random.Random | None = None,
+    mutation_rate: float = 0.02,
+    info_param_mutation_std: float = 0.01,
+    info_param_bounds: tuple[float, float] = (0.0, 1.0),
+    active_strategies: list[str] = STRATEGY_ORDER,
 ) -> list[dict]:
     """
     Truncation selection:
@@ -102,7 +132,9 @@ def evolve_truncation(
     - keep the remaining survivors
     - generate bottom_k children by sampling parents uniformly from the top_n agents
 
-    Children inherit strategy_type only.
+    Children inherit trader_type (with mutation_rate chance of random type switch) and
+    info_param (perturbed by Gaussian noise, clamped to info_param_bounds).
+    Survivors also have their trader_type mutated and info_param perturbed.
     """
     if rng is None:
         rng = random.Random()
@@ -126,13 +158,13 @@ def evolve_truncation(
     survivors = ranked[: population_size - bottom_k]
     parent_pool = ranked[:top_n]
 
-    children = []
-    for _ in range(bottom_k):
-        parent = rng.choice(parent_pool)
-        children.append({"trader_type": parent["trader_type"]})
+    children = [
+        _make_child(rng.choice(parent_pool), rng, mutation_rate, info_param_mutation_std, info_param_bounds, active_strategies)
+        for _ in range(bottom_k)
+    ]
 
     next_population = (
-        [{"trader_type": agent["trader_type"]} for agent in survivors]
+        [_make_child(agent, rng, mutation_rate, info_param_mutation_std, info_param_bounds, active_strategies) for agent in survivors]
         + children
     )
 
@@ -145,6 +177,10 @@ def evolve_tournament(
     bottom_k: int,
     tournament_size: int,
     rng: random.Random | None = None,
+    mutation_rate: float = 0.02,
+    info_param_mutation_std: float = 0.01,
+    info_param_bounds: tuple[float, float] = (0.0, 1.0),
+    active_strategies: list[str] = STRATEGY_ORDER,
 ) -> list[dict]:
     """
     Tournament selection:
@@ -153,7 +189,9 @@ def evolve_tournament(
     - for each child, sample 'tournament_size' candidates from the full ranked population
       and select the best among them as the parent
 
-    Children inherit strategy_type only.
+    Children inherit trader_type (with mutation_rate chance of random type switch) and
+    info_param (perturbed by Gaussian noise, clamped to info_param_bounds).
+    Survivors also have their trader_type mutated and info_param perturbed.
     """
     if rng is None:
         rng = random.Random()
@@ -180,10 +218,10 @@ def evolve_tournament(
     for _ in range(bottom_k):
         tournament = rng.sample(ranked, k=tournament_size)
         winner = max(tournament, key=lambda x: x["wealth"])
-        children.append({"trader_type": winner["trader_type"]})
+        children.append(_make_child(winner, rng, mutation_rate, info_param_mutation_std, info_param_bounds, active_strategies))
 
     next_population = (
-        [{"trader_type": agent["trader_type"]} for agent in survivors]
+        [_make_child(agent, rng, mutation_rate, info_param_mutation_std, info_param_bounds, active_strategies) for agent in survivors]
         + children
     )
 
@@ -196,6 +234,10 @@ def evolve_fitness_proportionate(
     bottom_k: int,
     rng: random.Random | None = None,
     epsilon: float = 1e-9,
+    mutation_rate: float = 0.02,
+    info_param_mutation_std: float = 0.01,
+    info_param_bounds: tuple[float, float] = (0.0, 1.0),
+    active_strategies: list[str] = STRATEGY_ORDER,
 ) -> list[dict]:
     """
     Fitness-proportionate (roulette wheel) selection:
@@ -206,6 +248,10 @@ def evolve_fitness_proportionate(
 
     Because wealth may be negative, fitness is shifted to be strictly positive:
         adjusted = wealth - min_wealth + epsilon
+
+    Children inherit trader_type (with mutation_rate chance of random type switch) and
+    info_param (perturbed by Gaussian noise, clamped to info_param_bounds).
+    Survivors also have their trader_type mutated and info_param perturbed.
     """
     if rng is None:
         rng = random.Random()
@@ -232,10 +278,10 @@ def evolve_fitness_proportionate(
     children = []
     for _ in range(bottom_k):
         parent = rng.choices(ranked, weights=adjusted_weights, k=1)[0]
-        children.append({"trader_type": parent["trader_type"]})
+        children.append(_make_child(parent, rng, mutation_rate, info_param_mutation_std, info_param_bounds, active_strategies))
 
     next_population = (
-        [{"trader_type": agent["trader_type"]} for agent in survivors]
+        [_make_child(agent, rng, mutation_rate, info_param_mutation_std, info_param_bounds, active_strategies) for agent in survivors]
         + children
     )
 
@@ -252,6 +298,13 @@ def evolve_population(
     """
     Dispatch function for evolutionary update rules.
     """
+    mutation_kwargs = {
+        "mutation_rate": algorithm_params.get("mutation_rate", 0.02),
+        "info_param_mutation_std": algorithm_params.get("info_param_mutation_std", 0.01),
+        "info_param_bounds": algorithm_params.get("info_param_bounds", (0.0, 1.0)),
+        "active_strategies": algorithm_params.get("active_strategies", STRATEGY_ORDER),
+    }
+
     if algorithm_name == "truncation":
         return evolve_truncation(
             final_score=final_score,
@@ -259,6 +312,7 @@ def evolve_population(
             top_n=algorithm_params["top_n"],
             bottom_k=algorithm_params["bottom_k"],
             rng=rng,
+            **mutation_kwargs,
         )
 
     if algorithm_name == "tournament":
@@ -268,6 +322,7 @@ def evolve_population(
             bottom_k=algorithm_params["bottom_k"],
             tournament_size=algorithm_params["tournament_size"],
             rng=rng,
+            **mutation_kwargs,
         )
 
     if algorithm_name == "fitness_proportionate":
@@ -277,6 +332,7 @@ def evolve_population(
             bottom_k=algorithm_params["bottom_k"],
             rng=rng,
             epsilon=algorithm_params.get("epsilon", 1e-9),
+            **mutation_kwargs,
         )
 
     raise ValueError(f"Unknown algorithm_name: {algorithm_name}")

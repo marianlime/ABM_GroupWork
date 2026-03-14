@@ -136,11 +136,17 @@ class Game:
             if trader_type not in valid_trader_types:
                 raise ValueError(f"Unknown trader_type in population_spec: {trader_type}")
 
+            # Use evolved info_param if present, otherwise sample from the distribution.
+            if "info_param" in agent_spec:
+                info_param = float(agent_spec["info_param"])
+            else:
+                info_param = float(self.noise_parameter_set[agent_id - 1])
+
             self.agents[agent_id] = Trader(
                 agent_id=agent_id,
                 cash=cash_per_agent,
                 shares=shares_per_agent,
-                info_param=float(self.noise_parameter_set[agent_id - 1]),
+                info_param=info_param,
                 strategy_probs=None,
                 trader_type=trader_type
             )
