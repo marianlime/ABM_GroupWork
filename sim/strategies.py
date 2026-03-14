@@ -493,7 +493,9 @@ def patient_signal(
 
 
 STRATEGIES = {
-    "zi": zero_intelligence,
+    # "zi" is intentionally absent: ZI orders are generated via Game._batch_zi_orders,
+    # which is the single authoritative implementation. The zero_intelligence() function
+    # above is never called during simulation and exists for reference only.
     "signal_following": signal_following,
     "utility_maximiser": utility_maximiser,
     "contrarian": contrarian,

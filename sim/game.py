@@ -12,6 +12,12 @@ def _noise_seed_from_run_id(run_id: str) -> int:
     return int(hashlib.sha256(f"noise_{run_id}".encode()).hexdigest()[:16], 16)
 
 
+def _zi_seed_from_run_id(run_id: str) -> int:
+    """Derive a separate stable seed for the ZI-agent RNG, distinct from the
+    noise-parameter seed so the two random streams are independent."""
+    return int(hashlib.sha256(f"zi_{run_id}".encode()).hexdigest()[:16], 16)
+
+
 class Game:
     def __init__(
         self,
@@ -169,10 +175,40 @@ class Game:
             aid for aid, agent in self.agents.items() if agent.trader_type == "zi"
         ]
 
-    def _batch_zi_orders(self, value: float) -> dict:
+        # Dedicated, reproducible RNG for ZI order generation — seeded from the
+        # run ULID so results are repeatable, and isolated from the noise-parameter
+        # RNG so the two streams don't interfere with each other.
+        self._zi_rng = np.random.default_rng(
+            _zi_seed_from_run_id(self.run_id) if self.run_id else None
+        )
+
+        # Initial per-agent endowment — used to cap ZI order sizes so that agents
+        # who have accumulated wealth don't place proportionally larger orders.
+        self._zi_initial_cash = cash_per_agent
+        self._zi_initial_shares = shares_per_agent
+
+        # Probability that a ZI agent abstains (holds) in any given round.
+        self._zi_hold_prob = 0.1
+
+    def _batch_zi_orders(self, prev_price) -> dict:
         """
-        Generate Zero-Intelligence orders for all ZI agents in one vectorised
-        batch, replacing 500 individual Python+numpy calls with 4 numpy calls.
+        Generate Zero-Intelligence orders for all ZI agents in one vectorised batch.
+
+        Fixes vs. original implementation
+        ----------------------------------
+        1. Price anchor  : uses the previous clearing price (public market info) rather
+                           than the fundamental value, so ZI agents carry no implicit
+                           fundamental knowledge.
+        2. Fixed price std: spread is fixed at S0_effective * 0.2 so it does not widen
+                           as the fundamental drifts — ZI noise is level-independent.
+        3. Hold probability: each agent independently abstains with probability
+                           _zi_hold_prob, giving ZI agents a genuine hold option.
+        4. Quantity cap  : order sizes are capped at the initial per-agent endowment
+                           (cash_per_agent / shares_per_agent) so accumulated wealth
+                           does not amplify ZI order flow over generations.
+        5. Seeded RNG    : uses self._zi_rng (np.random.Generator seeded from run_id)
+                           so ZI draws are fully reproducible and isolated from the
+                           noise-parameter RNG stream.
 
         Returns {agent_id: order_dict | None} where None means hold.
         """
@@ -183,27 +219,44 @@ class Game:
         zi_cash   = np.array([self.agents[aid].cash   for aid in self._zi_agent_ids])
         zi_shares = np.array([self.agents[aid].shares for aid in self._zi_agent_ids])
 
-        # Prices: Normal(value, value * 0.2), clipped to minimum 0.01
+        # --- Price generation ---------------------------------------------------
+        # Anchor on the previous clearing price (observable, public) rather than
+        # the fundamental value (private/model information ZI agents shouldn't have).
+        # Fall back to S0_effective when no prior clearing price exists.
+        price_ref = float(prev_price) if prev_price is not None else self.S0_effective
+
+        # Fixed std relative to the initial price level — does not scale with the
+        # current fundamental, preventing spread blow-up at high price levels.
+        price_std = self.S0_effective * 0.2
         prices = np.maximum(
-            np.round(np.random.normal(value, value * 0.2, n), 2),
+            np.round(self._zi_rng.normal(price_ref, price_std, n), 2),
             0.01
         )
 
-        # Feasibility per agent
-        can_buy  = (zi_cash > 0) & (value > 0)
-        can_sell = zi_shares > 0
+        # --- Hold probability ---------------------------------------------------
+        # Each agent independently abstains with probability _zi_hold_prob.
+        active = self._zi_rng.random(n) >= self._zi_hold_prob
+
+        # --- Feasibility --------------------------------------------------------
+        can_buy  = active & (zi_cash > 0) & (price_ref > 0)
+        can_sell = active & (zi_shares > 0)
 
         # 50/50 random action for agents that can do both
-        rand = np.random.random(n) < 0.5
+        rand = self._zi_rng.random(n) < 0.5
         action_buy  = (can_buy & ~can_sell) | (can_buy & can_sell & rand)
         action_sell = (~can_buy & can_sell) | (can_buy & can_sell & ~rand)
 
-        # Quantities
+        # --- Quantities ---------------------------------------------------------
+        # Cap at the initial per-agent endowment so wealthy ZI agents don't
+        # dominate order flow just because they've accumulated cash/shares.
         eps = 1e-6
-        max_buy_qty = np.where(prices > 0, zi_cash / prices, 0.0)
-        action_buy  = action_buy & (max_buy_qty > 0)
 
-        u_buy   = np.random.uniform(0, 1, n)
+        max_affordable  = np.where(prices > 0, zi_cash / prices, 0.0)
+        initial_buy_cap = self._zi_initial_cash / np.maximum(prices, eps)
+        max_buy_qty     = np.minimum(max_affordable, initial_buy_cap)
+        action_buy      = action_buy & (max_buy_qty > 0)
+
+        u_buy   = self._zi_rng.random(n)
         buy_qty = np.where(
             max_buy_qty > eps,
             np.round(eps + u_buy * (max_buy_qty - eps), 6),
@@ -211,15 +264,18 @@ class Game:
         )
         action_buy = action_buy & (buy_qty > 0)
 
-        u_sell   = np.random.uniform(0, 1, n)
+        max_sell_qty = np.minimum(zi_shares, self._zi_initial_shares)
+        action_sell  = action_sell & (max_sell_qty > 0)
+
+        u_sell   = self._zi_rng.random(n)
         sell_qty = np.where(
-            zi_shares > eps,
-            np.round(eps + u_sell * (zi_shares - eps), 6),
+            max_sell_qty > eps,
+            np.round(eps + u_sell * (max_sell_qty - eps), 6),
             0.0
         )
         action_sell = action_sell & (sell_qty > 0)
 
-        # Build result dict
+        # --- Build result dict --------------------------------------------------
         orders = {}
         for i, aid in enumerate(self._zi_agent_ids):
             if action_buy[i]:
@@ -252,6 +308,9 @@ class Game:
         _value_safe = max(value, 1e-12)
         _true_ratio = S_next / _value_safe
 
+        # Compute prev_price here so _batch_zi_orders can use it as a price anchor.
+        prev_price = self.price_history.get(current_round - 1, None)
+
         # Vectorised signal generation — one numpy call for all informed agents.
         if self._informed_agent_ids:
             if self.signal_noise_distribution == 'lognormal':
@@ -271,8 +330,8 @@ class Game:
         else:
             _informed_signals = {}
 
-        # Vectorised ZI order generation — replaces 500 individual strategy calls.
-        _zi_orders = self._batch_zi_orders(value)
+        # Vectorised ZI order generation — uses prev_price as price anchor.
+        _zi_orders = self._batch_zi_orders(prev_price)
 
         for agent_id, player in self.agents.items():
 
@@ -344,7 +403,6 @@ class Game:
         price_levels_bid = len(set(o["price"] for o in buy_orders))
         price_levels_ask = len(set(o["price"] for o in sell_orders))
 
-        prev_price = self.price_history.get(current_round - 1, None)
         best_price, total_volume, trades = clear_market(order_list, previous_price=prev_price)
 
         exec_summary = defaultdict(lambda: {
