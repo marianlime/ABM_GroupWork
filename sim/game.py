@@ -1,3 +1,4 @@
+from collections import Counter, defaultdict
 from .noise_signal import assign_noise_parameter_set
 from .trader import Trader
 from .market import clear_market
@@ -56,14 +57,15 @@ class Game:
         if self.n_agents == 0:
             raise ValueError("population_spec must contain at least one agent")
 
-        self.n_zi_agents = sum(1 for agent in population_spec if agent["trader_type"] == "zi")
-        self.n_signal_following_agents = sum(1 for agent in population_spec if agent["trader_type"] == "signal_following")
-        self.n_utility_maximiser_agents = sum(1 for agent in population_spec if agent["trader_type"] == "utility_maximiser")
-        self.n_contrarian_agents = sum(1 for agent in population_spec if agent["trader_type"] == "contrarian")
-        self.n_adapt_sig_agents = sum(1 for agent in population_spec if agent["trader_type"] == "adapt_sig")
-        self.n_threshold_signal_agents = sum(1 for agent in population_spec if agent["trader_type"] == "threshold_signal")
-        self.n_inventory_aware_utility_agents = sum(1 for agent in population_spec if agent["trader_type"] == "inventory_aware_utility")
-        self.n_patient_signal_agents = sum(1 for agent in population_spec if agent["trader_type"] == "patient_signal")
+        _type_counts = Counter(agent["trader_type"] for agent in population_spec)
+        self.n_zi_agents = _type_counts.get("zi", 0)
+        self.n_signal_following_agents = _type_counts.get("signal_following", 0)
+        self.n_utility_maximiser_agents = _type_counts.get("utility_maximiser", 0)
+        self.n_contrarian_agents = _type_counts.get("contrarian", 0)
+        self.n_adapt_sig_agents = _type_counts.get("adapt_sig", 0)
+        self.n_threshold_signal_agents = _type_counts.get("threshold_signal", 0)
+        self.n_inventory_aware_utility_agents = _type_counts.get("inventory_aware_utility", 0)
+        self.n_patient_signal_agents = _type_counts.get("patient_signal", 0)
 
         self.fundamental_source = fundamental_source
         self.n_rounds = n_rounds
@@ -345,21 +347,18 @@ class Game:
         prev_price = self.price_history.get(current_round - 1, None)
         best_price, total_volume, trades = clear_market(order_list, previous_price=prev_price)
 
-        exec_summary = {}
+        exec_summary = defaultdict(lambda: {
+            "executed_qty": 0.0,
+            "executed_notional": 0.0,
+            "cash_delta": 0.0,
+            "inventory_delta": 0.0,
+        })
 
         for trade in trades:
             aid = trade["agent_id"]
             qty = float(trade["quantity"])
             px = float(trade["price"])
             action = trade["action"]
-
-            if aid not in exec_summary:
-                exec_summary[aid] = {
-                    "executed_qty": 0.0,
-                    "executed_notional": 0.0,
-                    "cash_delta": 0.0,
-                    "inventory_delta": 0.0
-                }
 
             exec_summary[aid]["executed_qty"] += qty
             exec_summary[aid]["executed_notional"] += qty * px
@@ -407,10 +406,11 @@ class Game:
         })
 
         for aid, rec in agent_round_records.items():
-            executed_qty = exec_summary.get(aid, {}).get("executed_qty", 0.0)
-            executed_notional = exec_summary.get(aid, {}).get("executed_notional", 0.0)
-            cash_delta = exec_summary.get(aid, {}).get("cash_delta", 0.0)
-            inventory_delta = exec_summary.get(aid, {}).get("inventory_delta", 0.0)
+            s = exec_summary[aid]
+            executed_qty = s["executed_qty"]
+            executed_notional = s["executed_notional"]
+            cash_delta = s["cash_delta"]
+            inventory_delta = s["inventory_delta"]
 
             executed_price_avg = executed_notional / executed_qty if executed_qty > 0 else None
 

@@ -57,7 +57,6 @@ def insert_run_row(con,
         bias
     ])
 
-    print(f"Run {run_id} inserted into DuckDB")
 
 
 def insert_gbm_config_row(con, run_id, S0, volatility, drift, seed):
@@ -65,7 +64,6 @@ def insert_gbm_config_row(con, run_id, S0, volatility, drift, seed):
         """INSERT INTO gbm_config VALUES (?, ?, ?, ?, ?)""",
         [run_id, S0, drift, volatility, seed]
     )
-    print(f"GBM Configuration inserted into DuckDB")
 
 
 def insert_hist_config_row(con, run_id, ticker, interval, start_date, end_date, price_col, auto_adjust):
@@ -75,7 +73,6 @@ def insert_hist_config_row(con, run_id, ticker, interval, start_date, end_date, 
         )
     """, [run_id, ticker, interval, start_date, end_date, price_col, auto_adjust])
 
-    print(f"Historical Configuration inserted into DuckDB")
 
 
 def insert_fundamental_series(con, run_id, fundamental_series):
@@ -92,7 +89,6 @@ def insert_fundamental_series(con, run_id, fundamental_series):
         """,
         data
     )
-    print(f"Fundamental series inserted for run {run_id}")
 
 
 def insert_agent_population(con, run_id, agents):
@@ -113,7 +109,6 @@ def insert_agent_population(con, run_id, agents):
                     (run_id, agent_id, strategy_type, noise_parameter, group_label, initial_cash, initial_shares)
                     VALUES (?,?,?,?,?,?,?)""", data)
 
-    print(f"{len(data)} agents inserted into agent_population")
 
 
 def insert_agent_round_rows(con, records):
