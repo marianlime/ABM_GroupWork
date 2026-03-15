@@ -267,14 +267,15 @@ last_final_score = None
 # Accumulate round records across all generations and bulk-insert at the end,
 # replacing 50 separate executemany calls (one per generation) with a single
 # call per table — the dominant DB I/O cost.
-all_market_records = []
-all_agent_records = []
+#all_market_records = []
+#all_agent_records = []
 
 # ----------------------------
 # Evolutionary loop — one shared DB connection for the entire run
 # ----------------------------
 
 con = duckdb.connect(DB_PATH)
+con.execute("BEGIN TRANSACTION")
 try:
     for generation in range(n_generations):
         run_id = generate_ULID()
@@ -409,9 +410,12 @@ try:
         )
 
         # Accumulate round records — bulk-inserted after all generations complete.
-        all_market_records.extend(g.market_round_records)
-        all_agent_records.extend(g.agent_round_records)
+        #all_market_records.extend(g.market_round_records)
+        #all_agent_records.extend(g.agent_round_records)
 
+        insert_market_round_rows(con, g.market_round_records)
+        insert_agent_round_rows(con, g.agent_round_records)
+        
         # Keep references to the most recent game
         last_game = g
         last_final_score = final_score
@@ -455,8 +459,9 @@ try:
                 break
 
     # Bulk-insert all round records in one pass each.
-    insert_market_round_rows(con, all_market_records)
-    insert_agent_round_rows(con, all_agent_records)
+    #insert_market_round_rows(con, all_market_records)
+    #insert_agent_round_rows(con, all_agent_records)
+    con.execute("COMMIT")
 finally:
     con.close()
 

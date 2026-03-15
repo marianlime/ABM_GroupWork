@@ -383,9 +383,11 @@ def analyse_game_results(
         agent_df["trader_type"] = agent_df["agent_id"].map(agent_types)
 
         fundamental_array = np.array(g.fundamental_path, dtype=float)
+        rounds_idx = agent_df["round_number"].to_numpy(dtype=int)
+        
         agent_df["wealth_t"] = (
             agent_df["cash_end"]
-            + agent_df["inventory_end"] * agent_df["round_number"].map(lambda t: float(fundamental_array[t]))
+            + agent_df["inventory_end"] * fundamental_array[rounds_idx]
         )
 
         wealth_traj = (

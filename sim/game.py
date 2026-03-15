@@ -387,22 +387,46 @@ class Game:
                     "quantity": float(strat_order["Quantity"])
                 })
 
-        buy_orders = [o for o in order_list if o["action"] == "buy"]
-        sell_orders = [o for o in order_list if o["action"] == "sell"]
+        #buy_orders = [o for o in order_list if o["action"] == "buy"]
+        #sell_orders = [o for o in order_list if o["action"] == "sell"]
+        buy_orders, sell_orders = [], []
+        
 
-        best_bid = max((o["price"] for o in buy_orders), default=None)
-        best_ask = min((o["price"] for o in sell_orders), default=None)
+        #best_bid = max((o["price"] for o in buy_orders), default=None)
+        #best_ask = min((o["price"] for o in sell_orders), default=None)
+        best_bid, best_ask = None, None
+        
+        
+        
 
         n_active_buyers = len(buy_orders)
         n_active_sellers = len(sell_orders)
         n_active_total = len(order_list)
 
-        bid_depth_total = float(sum(o["quantity"] for o in buy_orders)) if buy_orders else 0.0
-        ask_depth_total = float(sum(o["quantity"] for o in sell_orders)) if sell_orders else 0.0
-
-        price_levels_bid = len(set(o["price"] for o in buy_orders))
-        price_levels_ask = len(set(o["price"] for o in sell_orders))
-
+        #bid_depth_total = float(sum(o["quantity"] for o in buy_orders)) if buy_orders else 0.0
+        #ask_depth_total = float(sum(o["quantity"] for o in sell_orders)) if sell_orders else 0.0
+        bid_depth_total, ask_depth_total = 0.0, 0.0
+        #price_levels_bid = len(set(o["price"] for o in buy_orders))
+        #price_levels_ask = len(set(o["price"] for o in sell_orders))
+        price_level_bid_set, price_levels_ask_set = set(), set()
+        for o in order_list:
+            px = o["price"]
+            qty  = o["quantity"]
+            if o["action"] == "buy":
+                buy_orders.append(o)
+                bid_depth_total += qty
+                price_level_bid_set.add(px)
+                if best_bid is None or px > best_bid:
+                    best_bid = px
+            else:
+                sell_orders.append(o)
+                ask_depth_total += qty
+                price_levels_ask_set.add(px)
+                if best_ask is None or px < best_ask:
+                    best_ask = px
+        
+        price_levels_bid = len(price_level_bid_set)
+        price_levels_ask = len(price_levels_ask_set)
         best_price, total_volume, trades = clear_market(order_list, previous_price=prev_price)
 
         exec_summary = defaultdict(lambda: {
