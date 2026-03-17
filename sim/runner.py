@@ -12,31 +12,13 @@ def play_game(
     n_rounds: int,
     total_initial_shares: float,
     total_initial_cash: float,
-    cash_to_share_ratio: float,
     run_id: str,
-    market_mechanism: str,
-    pricing_rule: str,
-    rationing_rule: str,
-    tie_break_rule: str,
-    transaction_cost_rate: float,
     # --- Signal / Noise ---
     noise_parameter_distribution_type: str,
     distribution_data: dict,
     signal_generator_noise_distribution: str,
-    bias: float,
     # --- Fundamentals ---
-    fundamental_source: str,
-    # --- GBM Configuration ---
     S0: float | None = None,
-    volatility: float | None = None,
-    drift: float | None = None,
-    # --- Historical Configuration ---
-    ticker: str | None = None,
-    interval: str | None = None,
-    start_date: str | None = None,
-    price_col: str | None = None,
-    auto_adjust: bool | None = None,
-    # --- Stock Path ---
     fundamental_path=None,
     seed=None
 ):
@@ -46,26 +28,11 @@ def play_game(
         n_rounds=n_rounds,
         total_initial_shares=total_initial_shares,
         total_initial_cash=total_initial_cash,
-        cash_to_share_ratio=cash_to_share_ratio,
         run_id=run_id,
-        market_mechanism=market_mechanism,
-        pricing_rule=pricing_rule,
-        rationing_rule=rationing_rule,
-        tie_break_rule=tie_break_rule,
-        transaction_cost_rate=transaction_cost_rate,
         noise_parameter_distribution_type=noise_parameter_distribution_type,
         distribution_data=distribution_data,
         signal_generator_noise_distribution=signal_generator_noise_distribution,
-        bias=bias,
-        fundamental_source=fundamental_source,
         S0=S0,
-        volatility=volatility,
-        drift=drift,
-        ticker=ticker,
-        interval=interval,
-        start_date=start_date,
-        price_col=price_col,
-        auto_adjust=auto_adjust,
         fundamental_path=fundamental_path,
         seed=seed,
     )
@@ -86,10 +53,23 @@ def play_game(
 
             current_game.current_round += 1
 
-        # Compute terminal wealth for each agent after the final round.
-        final_score = []
-        for agent_id in current_game.agents:
-            final_score.append((agent_id, current_game.liquidate_assets(agent_id)))
+        # Time-averaged mark-to-market wealth.
+        # Averaging over all T rounds (rather than using the single terminal snapshot)
+        # reduces the standard error of the fitness signal by ~sqrt(T), making
+        # evolutionary selection much less noisy with short generation lengths.
+        wealth_sum:   dict[int, float] = {}
+        wealth_count: dict[int, int]   = {}
+        for record in current_game.agent_round_records:
+            aid = record["agent_id"]
+            fund_price = float(current_game.fundamental_path[record["round_number"]])
+            mtm = record["cash_end"] + record["inventory_end"] * fund_price
+            wealth_sum[aid]   = wealth_sum.get(aid, 0.0) + mtm
+            wealth_count[aid] = wealth_count.get(aid, 0)  + 1
+
+        final_score = [
+            (aid, wealth_sum[aid] / wealth_count[aid])
+            for aid in current_game.agents
+        ]
 
     except Exception:
         failed_progress = (current_game.current_round / n_rounds) * 100.0

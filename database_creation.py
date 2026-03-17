@@ -1,6 +1,5 @@
 import duckdb
 from pathlib import Path
-import os 
 
 
 def create_database(DB_PATH):
@@ -43,19 +42,6 @@ def create_database(DB_PATH):
     drift                         DOUBLE NOT NULL,
     volatility                    DOUBLE NOT NULL,
     seed                          VARCHAR(64),
-    FOREIGN KEY (run_id) REFERENCES runs(run_id)
-    );
-    """)
-
-    con.execute("""
-    CREATE TABLE IF NOT EXISTS hist_config (
-    run_id                        VARCHAR(26) PRIMARY KEY,
-    ticker                        VARCHAR NOT NULL,
-    interval                      VARCHAR NOT NULL,
-    start_date                    DATE,
-    end_date                      DATE,
-    price_col                     VARCHAR,
-    auto_adjust                   BOOLEAN,
     FOREIGN KEY (run_id) REFERENCES runs(run_id)
     );
     """)
@@ -147,5 +133,4 @@ def create_database(DB_PATH):
     FOREIGN KEY (run_id, round_number) REFERENCES market_round(run_id, round_number)
     );
     """)
-    print(f"Current working directory: {os.getcwd()}")
     con.close()

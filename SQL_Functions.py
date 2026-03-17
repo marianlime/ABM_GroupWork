@@ -66,14 +66,6 @@ def insert_gbm_config_row(con, run_id, S0, volatility, drift, seed):
     )
 
 
-def insert_hist_config_row(con, run_id, ticker, interval, start_date, end_date, price_col, auto_adjust):
-    con.execute("""
-        INSERT INTO hist_config VALUES (
-            ?, ?, ?, ?, ?, ?, ?
-        )
-    """, [run_id, ticker, interval, start_date, end_date, price_col, auto_adjust])
-
-
 
 def insert_fundamental_series(con, run_id, fundamental_series):
     data = []

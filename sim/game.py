@@ -1,7 +1,7 @@
 from collections import Counter, defaultdict
 from .noise_signal import assign_noise_parameter_set
 from .trader import Trader
-from .market import clear_market
+from .market import clear_market, TRANSACTION_COST_RATE
 import hashlib
 import numpy as np
 
@@ -26,30 +26,13 @@ class Game:
         n_rounds: int,
         total_initial_shares: float,
         total_initial_cash: float,
-        cash_to_share_ratio: float,
         run_id: str,
-        market_mechanism: str,
-        pricing_rule: str,
-        rationing_rule: str,
-        tie_break_rule: str,
-        transaction_cost_rate: float,
         # --- Signal / Noise ---
         noise_parameter_distribution_type: str,
         distribution_data: dict,
         signal_generator_noise_distribution: str,
-        bias: float,
         # --- Fundamentals ---
-        fundamental_source: str,
-        # --- GBM Configuration ---
         S0: float | None = None,
-        volatility: float | None = None,
-        drift: float | None = None,
-        # --- Historical Configuration ---
-        ticker: str | None = None,
-        interval: str | None = None,
-        start_date: str | None = None,
-        price_col: str | None = None,
-        auto_adjust: bool | None = None,
         # --- stock_path ---
         fundamental_path=None,
         seed=None
@@ -65,53 +48,23 @@ class Game:
 
         _type_counts = Counter(agent["trader_type"] for agent in population_spec)
         self.n_zi_agents = _type_counts.get("zi", 0)
-        self.n_signal_following_agents = _type_counts.get("signal_following", 0)
-        self.n_utility_maximiser_agents = _type_counts.get("utility_maximiser", 0)
-        self.n_contrarian_agents = _type_counts.get("contrarian", 0)
-        self.n_adapt_sig_agents = _type_counts.get("adapt_sig", 0)
-        self.n_threshold_signal_agents = _type_counts.get("threshold_signal", 0)
-        self.n_inventory_aware_utility_agents = _type_counts.get("inventory_aware_utility", 0)
-        self.n_patient_signal_agents = _type_counts.get("patient_signal", 0)
+        self.strategy_type_counts = dict(_type_counts)
 
-        self.fundamental_source = fundamental_source
         self.n_rounds = n_rounds
         self.fundamental_path = fundamental_path
         self.total_initial_shares = total_initial_shares
         self.total_initial_cash = total_initial_cash
-
-        # fundamental source = GBM
         self.S0 = S0
-        self.volatility = volatility
-        self.drift = drift
         self.run_id = run_id
-
-        # fundamental source = Historical
-        self.ticker = ticker
-        self.interval = interval
-        self.start_date = start_date
-        self.price_col = price_col
-        self.auto_adjust = auto_adjust
-
-        self.market_mechanism = market_mechanism
-        self.pricing_rule = pricing_rule
-        self.rationing_rule = rationing_rule
-        self.tie_break_rule = tie_break_rule
-        self.transaction_cost_rate = transaction_cost_rate
 
         self.noise_parameter_distribution_type = noise_parameter_distribution_type
         self.distribution_data = distribution_data
         self.signal_noise_distribution = signal_generator_noise_distribution
-        self.bias = bias
 
         self.market_round_records = []
         self.agent_round_records = []
 
-        if self.S0 is not None:
-            self.S0_effective = float(self.S0)
-        elif self.fundamental_path is not None and len(self.fundamental_path) > 0:
-            self.S0_effective = float(self.fundamental_path[0])
-        else:
-            self.S0_effective = 1.0
+        self.S0_effective = float(self.S0) if self.S0 is not None else 1.0
 
         self.order_history = {}
         self.price_history = {}
@@ -127,21 +80,12 @@ class Game:
         cash_per_agent = self.total_initial_cash / self.n_agents
         shares_per_agent = self.total_initial_shares / self.n_agents
 
-        valid_trader_types = {
-            "zi",
-            "signal_following",
-            "utility_maximiser",
-            "contrarian",
-            "adapt_sig",
-            "threshold_signal",
-            "inventory_aware_utility",
-            "patient_signal",
-        }
+        from .evolution import VALID_STRATEGIES  # avoid circular import at module level
 
         for agent_id, agent_spec in enumerate(self.population_spec, start=1):
             trader_type = agent_spec["trader_type"]
 
-            if trader_type not in valid_trader_types:
+            if trader_type not in VALID_STRATEGIES:
                 raise ValueError(f"Unknown trader_type in population_spec: {trader_type}")
 
             # Use evolved info_param if present, otherwise sample from the distribution.
@@ -155,8 +99,8 @@ class Game:
                 cash=cash_per_agent,
                 shares=shares_per_agent,
                 info_param=info_param,
-                strategy_probs=None,
-                trader_type=trader_type
+                trader_type=trader_type,
+                strategy_params=agent_spec.get("strategy_params", {}),
             )
 
         # Pre-cache informed agent IDs and their noise parameters so signal
@@ -315,7 +259,7 @@ class Game:
         if self._informed_agent_ids:
             if self.signal_noise_distribution == 'lognormal':
                 _multipliers = np.exp(
-                    np.random.normal(self.bias, self._informed_noise_params)
+                    np.random.normal(0.0, self._informed_noise_params)
                 )
             elif self.signal_noise_distribution == 'uniform':
                 _lows = np.maximum(1.0 - self._informed_noise_params, 1e-6)
@@ -387,17 +331,8 @@ class Game:
                     "quantity": float(strat_order["Quantity"])
                 })
 
-        #buy_orders = [o for o in order_list if o["action"] == "buy"]
-        #sell_orders = [o for o in order_list if o["action"] == "sell"]
         buy_orders, sell_orders = [], []
-        
-
-        #best_bid = max((o["price"] for o in buy_orders), default=None)
-        #best_ask = min((o["price"] for o in sell_orders), default=None)
         best_bid, best_ask = None, None
-        
-        
-        
 
         n_active_buyers = len(buy_orders)
         n_active_sellers = len(sell_orders)
@@ -446,7 +381,7 @@ class Game:
             exec_summary[aid]["executed_notional"] += qty * px
 
             trade_value = qty * px
-            fee = trade_value * self.transaction_cost_rate
+            fee = trade_value * TRANSACTION_COST_RATE
 
             if action == "buy":
                 exec_summary[aid]["cash_delta"] -= trade_value
@@ -519,7 +454,7 @@ class Game:
         action = trade["action"]
 
         trade_value = qty * px
-        fee = trade_value * self.transaction_cost_rate
+        fee = trade_value * TRANSACTION_COST_RATE
 
         if action == "buy":
             agent.shares += qty

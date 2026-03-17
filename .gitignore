@@ -8,4 +8,4 @@ __pycache__/
 /.vscode
 /Tests/.pytest_cache
 /.pytest_cache
-testdataset.duckdb
+*.duckdb

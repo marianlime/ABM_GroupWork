@@ -23,6 +23,14 @@ entirely inside numpy's C layer.
 
 import numpy as np
 
+# ── Fixed market configuration ────────────────────────────────────────────────
+# These are not exposed as run parameters — edit here to change market behaviour.
+MARKET_MECHANISM     = "call_auction"
+PRICING_RULE         = "maximum_volume_minimum_imbalance"
+RATIONING_RULE       = "proportional_rationing"
+TIE_BREAK_RULE       = "previous_price_proximity"
+TRANSACTION_COST_RATE = 0.0   # fraction of trade value charged as fee
+
 
 def clear_market(orders, previous_price=None):
     """

@@ -38,19 +38,3 @@ def assign_noise_parameter_set(n_agents, noise_parameter_distribution_type, dist
 
     else:
         raise ValueError(f"Unknown noise_parameter_distribution_type : {noise_parameter_distribution_type}")
-    
-def signal_generator(noise_parameter, S_next, bias, signal_generator_noise_distribution):
-    if signal_generator_noise_distribution == 'lognormal':
-        # multiplicative lognormal noise
-        # adding a bias factor into the noise as it can replicate real world market "average" belief(bullish or bearish)
-        return S_next * np.exp(np.random.normal(bias, noise_parameter))
-
-    if signal_generator_noise_distribution == 'uniform':
-        # multiplicative uniform noise around 1: U(1-σ, 1+σ)
-        # clip lower bound so the multiplier stays positive
-        sigma = float(noise_parameter)
-        low = max(1.0 - sigma, 1e-6)
-        high = 1.0 + sigma
-        return S_next * np.random.uniform(low, high)
-
-    raise ValueError(f"Unknown noise_distribution: {signal_generator_noise_distribution}")
