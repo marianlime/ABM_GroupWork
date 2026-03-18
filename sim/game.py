@@ -143,8 +143,9 @@ class Game:
         1. Price anchor  : uses the previous clearing price (public market info) rather
                            than the fundamental value, so ZI agents carry no implicit
                            fundamental knowledge.
-        2. Fixed price std: spread is fixed at S0_effective * 0.2 so it does not widen
-                           as the fundamental drifts — ZI noise is level-independent.
+        2. Adaptive price std: spread is price_ref * realized_vol, where realized_vol
+                           is the std of log-returns over the last 20 clearing prices.
+                           Falls back to 0.2 when fewer than 2 prices are available.
         3. Hold probability: each agent independently abstains with probability
                            _zi_hold_prob, giving ZI agents a genuine hold option.
         4. Quantity cap  : order sizes are capped at the initial per-agent endowment
@@ -169,9 +170,17 @@ class Game:
         # Fall back to S0_effective when no prior clearing price exists.
         price_ref = float(prev_price) if prev_price is not None else self.S0_effective
 
-        # Fixed std relative to the initial price level — does not scale with the
-        # current fundamental, preventing spread blow-up at high price levels.
-        price_std = self.S0_effective * 0.2
+        # Realized volatility from recent clearing prices (std of log returns).
+        # Falls back to 0.2 when fewer than 2 cleared prices are available.
+        _vol_window = 20
+        _recent_prices = [p for _, p in sorted(self.price_history.items())[-_vol_window:]]
+        if len(_recent_prices) >= 2:
+            _log_returns = np.diff(np.log(np.maximum(_recent_prices, 1e-12)))
+            realized_vol = float(np.clip(np.std(_log_returns), 0.01, 1.0))
+        else:
+            realized_vol = 0.2
+
+        price_std = price_ref * realized_vol
         prices = np.maximum(
             np.round(self._zi_rng.normal(price_ref, price_std, n), 2),
             0.01

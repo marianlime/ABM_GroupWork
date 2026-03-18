@@ -53,8 +53,8 @@ run_notes       = "Notes for the run"
 experiment_seed = 42
 
 # --- Population ---
-n_zi_agents           = 35
-n_parameterised_agents = 65
+n_zi_agents           = 65
+n_parameterised_agents = 35
 
 # --- Simulation ---
 n_generations = 200

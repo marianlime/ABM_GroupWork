@@ -5,10 +5,16 @@ import numpy as np
 # Strategy functions
 # ----------------------------
 
-def zero_intelligence(signal: float, cash: float, shares: float, value: float) -> dict:
+
+
+def zero_intelligence(signal: float, cash: float, shares: float, value: float,
+                      realized_vol: float = 0.2) -> dict:
     """
     Reference implementation only — not called during simulation.
     ZI orders are generated in bulk by Game._batch_zi_orders for performance.
+
+    realized_vol: std of recent log-returns used to set the price spread.
+                  Defaults to 0.2; in simulation this is computed from price history.
     """
     can_buy = cash > 0 and value > 0
     can_sell = shares > 0
@@ -23,8 +29,7 @@ def zero_intelligence(signal: float, cash: float, shares: float, value: float) -
     else:
         action = "sell"
 
-    price_range = 0.2
-    price = max(round(float(np.random.normal(value, value * price_range)), 2), 0.01)
+    price = max(round(float(np.random.normal(value, value * realized_vol)), 2), 0.01)
 
     if action == "buy":
         max_qty = cash / price if price > 0 else 0
@@ -40,6 +45,12 @@ def zero_intelligence(signal: float, cash: float, shares: float, value: float) -
             "Buy": 1.0 if action == "buy" else 0.0,
             "Sell": 1.0 if action == "sell" else 0.0,
             "Hold": 0.0}
+
+# look into parameters and see, slighlty arbitrary, what do they mean....
+# can we normalise all the parameters of the parameterised_informed agent
+# understable strategies
+# normalise parameters
+# generalised parameters
 
 
 def parameterised_informed(
