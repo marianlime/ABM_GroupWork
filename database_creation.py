@@ -96,9 +96,14 @@ def create_database(DB_PATH):
     agent_id                        INTEGER NOT NULL,
     strategy_type                   VARCHAR NOT NULL,
     noise_parameter                 DOUBLE,
+    direction_bias                  DOUBLE,
+    aggression                      DOUBLE,
+    patience                        DOUBLE,
+    threshold                       DOUBLE,
     group_label                     VARCHAR,
     initial_cash                    DOUBLE,
     initial_shares                  DOUBLE,
+    
 
     PRIMARY KEY (run_id, agent_id),
     FOREIGN KEY (run_id) REFERENCES runs(run_id)

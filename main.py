@@ -57,7 +57,7 @@ n_zi_agents           = 65
 n_parameterised_agents = 35
 
 # --- Simulation ---
-n_generations = 200
+n_generations = 100
 n_rounds      = 10
 
 # --- Initial endowments ---

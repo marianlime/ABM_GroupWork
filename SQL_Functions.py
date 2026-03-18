@@ -87,19 +87,42 @@ def insert_agent_population(con, run_id, agents):
     data = []
     for agent_id, agent in agents.items():
         group_label = "noise" if agent.trader_type == "zi" else "informed"
+        params = getattr(agent, "strategy_params", {}) or {}
+        
+        direction_bias = params.get("direction_bias", None)
+        aggression = params.get("aggression", None)
+        patience = params.get("patience", None)
+        threshold = params.get("threshold", None)
         data.append((
             run_id,
             int(agent_id),
             str(agent.trader_type),
             float(agent.info_param),
+            float(direction_bias) if direction_bias is not None else None,
+            float(aggression) if aggression is not None else None,
+            float(patience) if patience is not None else None,
+            float(threshold) if threshold is not None else None,
             group_label,
             float(agent.cash),
             float(agent.shares)
         ))
 
-    con.executemany("""INSERT INTO agent_population
-                    (run_id, agent_id, strategy_type, noise_parameter, group_label, initial_cash, initial_shares)
-                    VALUES (?,?,?,?,?,?,?)""", data)
+    con.executemany("""
+        INSERT INTO agent_population (
+            run_id, 
+            agent_id, 
+            strategy_type, 
+            noise_parameter, 
+            direction_bias, 
+            aggression, 
+            patience, 
+            threshold, 
+            group_label, 
+            initial_cash, 
+            initial_shares
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, data)
 
 
 
