@@ -71,6 +71,7 @@ def play_game(
         final_score = [
             (aid, wealth_sum[aid] / wealth_count[aid])
             for aid in current_game.agents
+            if wealth_count.get(aid, 0) > 0
         ]
 
     except Exception:

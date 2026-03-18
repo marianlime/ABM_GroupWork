@@ -50,14 +50,14 @@ if not os.path.exists(DB_PATH):
 experiment_name = "Experiment Name"
 experiment_type = "A sub section for the experiment"
 run_notes       = "Notes for the run"
-experiment_seed = 42
+experiment_seed = 45
 
 # --- Population ---
 n_zi_agents           = 65
 n_parameterised_agents = 35
 
 # --- Simulation ---
-n_generations = 200
+n_generations = 100
 n_rounds      = 10
 
 # --- Initial endowments ---
@@ -66,7 +66,7 @@ total_initial_shares = 10
 
 # --- GBM fundamental path ---
 GBM_S0         = 100
-GBM_volatility = 0.2
+GBM_volatility = 0.20
 GBM_drift      = 0.01
 
 # --- Noise / signal ---
@@ -81,18 +81,18 @@ signal_generator_noise_distribution = "lognormal"
 # --- Evolution: parameter search space ---
 # Each entry: (min, max, gaussian_mutation_std)
 PARAM_BOUNDS = {
-    "direction_bias": (-1.0,  1.0,  0.10),
-    "aggression":     ( 0.1,  5.0,  0.20),
-    "patience":       ( 0.0,  1.0,  0.05),
-    "threshold":      ( 0.0,  0.50, 0.03),
+    "qty_aggression":    (0.0, 1.0, 0.02),
+    "signal_aggression": (0.0, 1.0, 0.02),
+    "threshold":         (0.0, 1.0, 0.02),
+    "signal_clip":       (0.0, 1.0, 0.02),
 }
 
 # Starting values for a newly initialised parameterised_informed agent.
 DEFAULT_STRATEGY_PARAMS = {
-    "direction_bias": 1.0,
-    "aggression":     1.0,
-    "patience":       1.0,
-    "threshold":      0.0,
+    "qty_aggression":    0.5,
+    "signal_aggression": 0.5,
+    "threshold":         0.0,
+    "signal_clip":       0.5,
 }
 
 # --- Evolution algorithm ---
@@ -166,11 +166,10 @@ py_vers   = _py_version()
 code_vers = _code_version()
 
 # ----------------------------
-# Evolutionary loop — one shared DB connection for the entire run
+# Evolutionary loop — one shared DB connection, committed per generation
 # ----------------------------
 
 con = duckdb.connect(DB_PATH)
-con.execute("BEGIN TRANSACTION")
 try:
     for generation in range(n_generations):
         run_id        = _generate_ulid()
@@ -182,69 +181,78 @@ try:
         informed_specs = [a for a in population_spec if a["trader_type"] == "parameterised_informed"]
         if informed_specs:
             _pm = {p: sum(a["strategy_params"][p] for a in informed_specs) / len(informed_specs)
-                   for p in ["direction_bias", "aggression", "patience", "threshold"]}
-            _param_str = (f"dir={_pm['direction_bias']:.2f} agg={_pm['aggression']:.2f} "
-                          f"pat={_pm['patience']:.2f} thr={_pm['threshold']:.2f}")
+                   for p in ["qty_aggression", "signal_aggression", "threshold", "signal_clip"]}
+            _param_str = (f"qty_agg={_pm['qty_aggression']:.2f} "
+                          f"sig_agg={_pm['signal_aggression']:.2f} "
+                          f"thr={_pm['threshold']:.2f} "
+                          f"clip={_pm['signal_clip']:.2f}")
         else:
             _param_str = "no informed agents"
         print(f"Generation {generation} | Run {run_id} | "
               f"ZI: {current_counts['zi']} | Informed: {current_counts['parameterised_informed']} | "
               f"{_param_str}")
 
-        insert_run_row(
-            con,
-            run_id,
-            experiment_name,
-            f"{experiment_type} | generation_{generation}",
-            creation_time,
-            None,           # completion_time — filled in by play_game
-            run_notes,
-            n_rounds,
-            "GBM",
-            "STARTED",
-            0,
-            py_vers,
-            code_vers,
-            n_agents,
-            total_initial_cash,
-            total_initial_shares,
-            "call_auction",
-            "maximum_volume_minimum_imbalance",
-            "proportional_rationing",
-            "previous_price_proximity",
-            0.0,            # transaction_cost_rate
-            noise_parameter_distribution_type,
-            distribution_data,
-            signal_generator_noise_distribution,
-            0.0,            # bias (fixed; kept in schema for backwards compatibility)
-        )
+        con.execute("BEGIN TRANSACTION")
+        try:
+            insert_run_row(
+                con,
+                run_id,
+                experiment_name,
+                f"{experiment_type} | generation_{generation}",
+                creation_time,
+                None,           # completion_time — filled in by play_game
+                run_notes,
+                n_rounds,
+                "GBM",
+                "STARTED",
+                0,
+                py_vers,
+                code_vers,
+                n_agents,
+                total_initial_cash,
+                total_initial_shares,
+                "call_auction",
+                "maximum_volume_minimum_imbalance",
+                "proportional_rationing",
+                "previous_price_proximity",
+                0.0,            # transaction_cost_rate
+                noise_parameter_distribution_type,
+                distribution_data,
+                signal_generator_noise_distribution,
+                0.0,            # bias (fixed; kept in schema for backwards compatibility)
+            )
 
-        # Generate a fresh GBM path for this generation
-        seed             = f"gbm_generation_{generation}_seed_{experiment_seed}"
-        fundamental_path = simulate_gbm(GBM_S0, GBM_volatility, GBM_drift, n_rounds, seed)
+            # Generate a fresh GBM path for this generation
+            seed             = f"gbm_generation_{generation}_seed_{experiment_seed}"
+            fundamental_path = simulate_gbm(GBM_S0, GBM_volatility, GBM_drift, n_rounds, seed)
 
-        insert_gbm_config_row(con, run_id, GBM_S0, GBM_volatility, GBM_drift, seed)
-        insert_fundamental_series(con, run_id, tuple(enumerate(fundamental_path)))
+            insert_gbm_config_row(con, run_id, GBM_S0, GBM_volatility, GBM_drift, seed)
+            insert_fundamental_series(con, run_id, tuple(enumerate(fundamental_path)))
 
-        # Run this generation's game
-        final_score, g = play_game(
-            con,
-            population_spec,
-            n_rounds,
-            total_initial_shares,
-            total_initial_cash,
-            run_id,
-            noise_parameter_distribution_type,
-            distribution_data,
-            signal_generator_noise_distribution,
-            S0=GBM_S0,
-            gbm_volatility=GBM_volatility,
-            fundamental_path=fundamental_path,
-            seed=seed,
-        )
+            # Run this generation's game
+            final_score, g = play_game(
+                con,
+                population_spec,
+                n_rounds,
+                total_initial_shares,
+                total_initial_cash,
+                run_id,
+                noise_parameter_distribution_type,
+                distribution_data,
+                signal_generator_noise_distribution,
+                S0=GBM_S0,
+                gbm_volatility=GBM_volatility,
+                fundamental_path=fundamental_path,
+                seed=seed,
+            )
 
-        insert_market_round_rows(con, g.market_round_records)
-        insert_agent_round_rows(con, g.agent_round_records)
+            insert_market_round_rows(con, g.market_round_records)
+            insert_agent_round_rows(con, g.agent_round_records)
+
+            con.execute("COMMIT")
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
 
         last_game        = g
         last_final_score = final_score
@@ -286,7 +294,6 @@ try:
             zi_cohort       = [{"trader_type": "zi"} for _ in range(n_zi_agents)]
             population_spec = zi_cohort + evolved
 
-    con.execute("COMMIT")
 finally:
     con.close()
 

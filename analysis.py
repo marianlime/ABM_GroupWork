@@ -5,12 +5,12 @@ import matplotlib.pyplot as plt
 # Canonical order and bounds for the four learnable parameters.
 # Keep in sync with PARAM_BOUNDS in main.py.
 PARAM_BOUNDS = {
-    "direction_bias": (-1.0,  1.0,  0.10),
-    "aggression":     ( 0.1,  5.0,  0.20),
-    "patience":       ( 0.0,  1.0,  0.05),
-    "threshold":      ( 0.0,  0.50, 0.03),
+    "qty_aggression":    (0.0, 1.0, 0.02),
+    "signal_aggression": (0.0, 1.0, 0.02),
+    "threshold":         (0.0, 1.0, 0.02),
+    "signal_clip":       (0.0, 1.0, 0.02),
 }
-PARAM_NAMES = list(PARAM_BOUNDS.keys())  # direction_bias, aggression, patience, threshold
+PARAM_NAMES = list(PARAM_BOUNDS.keys())
 
 _ROLL = 10   # smoothing window (generations) used throughout
 
@@ -123,14 +123,14 @@ def analyse_game_results(
                 ttype  = getattr(agent, "trader_type", "unknown")
                 params = getattr(agent, "strategy_params", {}) or {}
                 rows.append({
-                    "agent_id":       aid,
-                    "type":           ttype,
-                    "info_param":     float(getattr(agent, "info_param", np.nan)),
-                    "direction_bias": params.get("direction_bias", np.nan),
-                    "aggression":     params.get("aggression",     np.nan),
-                    "patience":       params.get("patience",       np.nan),
-                    "threshold":      params.get("threshold",      np.nan),
-                    "wealth_final":   float(wealth_map.get(aid, np.nan)),
+                    "agent_id":          aid,
+                    "type":              ttype,
+                    "info_param":        float(getattr(agent, "info_param", np.nan)),
+                    "qty_aggression":    params.get("qty_aggression",    np.nan),
+                    "signal_aggression": params.get("signal_aggression", np.nan),
+                    "threshold":         params.get("threshold",         np.nan),
+                    "signal_clip":       params.get("signal_clip",       np.nan),
+                    "wealth_final":      float(wealth_map.get(aid, np.nan)),
                 })
     else:
         wealth_map = dict(final_score)
@@ -139,16 +139,16 @@ def analyse_game_results(
             ttype  = getattr(agent, "trader_type", "unknown")
             params = getattr(agent, "strategy_params", {}) or {}
             rows.append({
-                "agent_id":       aid,
-                "type":           ttype,
-                "info_param":     float(getattr(agent, "info_param", np.nan)),
-                "direction_bias": params.get("direction_bias", np.nan),
-                "aggression":     params.get("aggression",     np.nan),
-                "patience":       params.get("patience",       np.nan),
-                "threshold":      params.get("threshold",      np.nan),
-                "cash_final":     float(getattr(agent, "cash",   np.nan)),
-                "shares_final":   float(getattr(agent, "shares", np.nan)),
-                "wealth_final":   float(wealth_map.get(aid, np.nan)),
+                "agent_id":          aid,
+                "type":              ttype,
+                "info_param":        float(getattr(agent, "info_param", np.nan)),
+                "qty_aggression":    params.get("qty_aggression",    np.nan),
+                "signal_aggression": params.get("signal_aggression", np.nan),
+                "threshold":         params.get("threshold",         np.nan),
+                "signal_clip":       params.get("signal_clip",       np.nan),
+                "cash_final":        float(getattr(agent, "cash",   np.nan)),
+                "shares_final":      float(getattr(agent, "shares", np.nan)),
+                "wealth_final":      float(wealth_map.get(aid, np.nan)),
             })
 
     df = pd.DataFrame(rows).sort_values("wealth_final", ascending=False).reset_index(drop=True)
@@ -156,7 +156,7 @@ def analyse_game_results(
 
     # ── Print summaries ───────────────────────────────────────────────────────
     display_cols = ["rank", "agent_id", "type", "info_param",
-                    "direction_bias", "aggression", "patience", "threshold",
+                    "qty_aggression", "signal_aggression", "threshold", "signal_clip",
                     "wealth_final"]
     display_cols = [c for c in display_cols if c in df.columns]
 
@@ -429,6 +429,42 @@ def analyse_game_results(
         ax.set_ylabel("Mean Wealth ± 1 std (mark-to-market)")
         ax.set_title(f"{title_prefix}Wealth Trajectories by Strategy ({_data_label})")
         ax.legend(title="Strategy Type")
+        plt.tight_layout()
+        plt.show()
+
+    # ----- 9. Clip−threshold gap over generations -----
+    if (generation_counts_df is not None and not generation_counts_df.empty
+            and "mean_threshold" in generation_counts_df.columns
+            and "mean_signal_clip" in generation_counts_df.columns):
+        gens = generation_counts_df["generation"]
+        gap  = generation_counts_df["mean_signal_clip"] - generation_counts_df["mean_threshold"]
+        smooth_gap = gap.rolling(window=_ROLL, min_periods=1, center=True).mean()
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(gens, gap,        color="purple", alpha=0.2, linewidth=0.8)
+        ax.plot(gens, smooth_gap, color="purple", linewidth=2.0,
+                label=f"{_ROLL}-gen rolling mean")
+        ax.axhline(0, color="black", linewidth=0.8, linestyle="--", label="threshold = clip boundary")
+        ax.set_xlabel("Generation")
+        ax.set_ylabel("mean(signal_clip − threshold)")
+        ax.set_title(f"{title_prefix}Clip−Threshold Gap Over Generations (positive = agents can trade)")
+        ax.legend()
+        plt.tight_layout()
+        plt.show()
+
+    # ----- 10. Mean volume over generations -----
+    if (generation_counts_df is not None and not generation_counts_df.empty
+            and "mean_volume" in generation_counts_df.columns
+            and "generation" in generation_counts_df.columns):
+        gens = generation_counts_df["generation"]
+        smooth_vol = generation_counts_df["mean_volume"].rolling(
+            window=_ROLL, min_periods=1, center=True).mean()
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.plot(gens, generation_counts_df["mean_volume"], color="teal", alpha=0.2, linewidth=0.8)
+        ax.plot(gens, smooth_vol, color="teal", linewidth=2.0, label=f"{_ROLL}-gen rolling mean")
+        ax.set_xlabel("Generation")
+        ax.set_ylabel("Mean volume per round")
+        ax.set_title(f"{title_prefix}Mean Volume Over Generations ({_ROLL}-gen smooth)")
+        ax.legend()
         plt.tight_layout()
         plt.show()
 

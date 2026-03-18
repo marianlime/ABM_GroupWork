@@ -32,9 +32,10 @@ def assign_noise_parameter_set(n_agents, noise_parameter_distribution_type, dist
         return np.clip(np.concatenate([group_a, group_b]), 0.01, 1.01)
 
     elif noise_parameter_distribution_type == "skewed":
-        return rng.lognormal(mean=distribution_data["mean"],
-                             sigma=distribution_data["sigma"],
-                             size=n_agents)
+        samples = rng.lognormal(mean=distribution_data["mean"],
+                                sigma=distribution_data["sigma"],
+                                size=n_agents)
+        return np.clip(samples, 0.0, 1.0)
 
     else:
         raise ValueError(f"Unknown noise_parameter_distribution_type : {noise_parameter_distribution_type}")

@@ -18,6 +18,12 @@ def _zi_seed_from_run_id(run_id: str) -> int:
     return int(hashlib.sha256(f"zi_{run_id}".encode()).hexdigest()[:16], 16)
 
 
+def _signal_seed_from_run_id(run_id: str) -> int:
+    """Derive a stable seed for the informed-agent signal RNG, independent of
+    the noise-parameter and ZI seeds so all three streams are isolated."""
+    return int(hashlib.sha256(f"signal_{run_id}".encode()).hexdigest()[:16], 16)
+
+
 class Game:
     def __init__(
         self,
@@ -71,9 +77,10 @@ class Game:
         self.order_history = {}
         self.price_history = {}
 
+        n_informed = sum(1 for a in self.population_spec if a["trader_type"] != "zi")
         noise_seed = _noise_seed_from_run_id(self.run_id) if self.run_id else None
         self.noise_parameter_set = assign_noise_parameter_set(
-            n_agents=self.n_agents,
+            n_agents=n_informed,
             noise_parameter_distribution_type=self.noise_parameter_distribution_type,
             distribution_data=self.distribution_data,
             seed=noise_seed
@@ -84,6 +91,7 @@ class Game:
 
         from .evolution import VALID_STRATEGIES  # avoid circular import at module level
 
+        informed_idx = 0
         for agent_id, agent_spec in enumerate(self.population_spec, start=1):
             trader_type = agent_spec["trader_type"]
 
@@ -93,8 +101,11 @@ class Game:
             # Use evolved info_param if present, otherwise sample from the distribution.
             if "info_param" in agent_spec:
                 info_param = float(agent_spec["info_param"])
+            elif trader_type != "zi":
+                info_param = float(self.noise_parameter_set[informed_idx])
+                informed_idx += 1
             else:
-                info_param = float(self.noise_parameter_set[agent_id - 1])
+                info_param = 0.0
 
             self.agents[agent_id] = Trader(
                 agent_id=agent_id,
@@ -126,6 +137,12 @@ class Game:
         # RNG so the two streams don't interfere with each other.
         self._zi_rng = np.random.default_rng(
             _zi_seed_from_run_id(self.run_id) if self.run_id else None
+        )
+
+        # Dedicated, reproducible RNG for informed-agent signal generation —
+        # isolated from both the ZI and noise-parameter streams.
+        self._signal_rng = np.random.default_rng(
+            _signal_seed_from_run_id(self.run_id) if self.run_id else None
         )
 
         # Initial per-agent endowment — used to cap ZI order sizes so that agents
@@ -207,13 +224,20 @@ class Game:
         )
         action_buy = action_buy & (buy_qty > 0)
 
-        max_sell_qty = np.minimum(zi_shares, self._zi_initial_shares)
-        action_sell  = action_sell & (max_sell_qty > 0)
+        initial_sell_cap  = self._zi_initial_shares
+        max_sell_qty      = np.minimum(zi_shares, initial_sell_cap)
+        max_sell_dollar   = max_sell_qty * prices          # cap in dollar space
+        action_sell       = action_sell & (max_sell_qty > 0)
 
-        u_sell   = self._zi_rng.random(n)
+        u_sell      = self._zi_rng.random(n)
+        sell_dollar = np.where(
+            max_sell_dollar > eps,
+            eps + u_sell * (max_sell_dollar - eps),
+            0.0
+        )
         sell_qty = np.where(
-            max_sell_qty > eps,
-            np.round(eps + u_sell * (max_sell_qty - eps), 6),
+            prices > 0,
+            np.round(sell_dollar / prices, 6),
             0.0
         )
         action_sell = action_sell & (sell_qty > 0)
@@ -258,12 +282,12 @@ class Game:
         if self._informed_agent_ids:
             if self.signal_noise_distribution == 'lognormal':
                 _multipliers = np.exp(
-                    np.random.normal(0.0, self._informed_noise_params)
+                    self._signal_rng.normal(0.0, self._informed_noise_params)
                 )
             elif self.signal_noise_distribution == 'uniform':
                 _lows = np.maximum(1.0 - self._informed_noise_params, 1e-6)
                 _highs = 1.0 + self._informed_noise_params
-                _u = np.random.uniform(0, 1, len(self._informed_noise_params))
+                _u = self._signal_rng.uniform(0, 1, len(self._informed_noise_params))
                 _multipliers = _lows + _u * (_highs - _lows)
             else:
                 raise ValueError(f"Unknown noise_distribution: {self.signal_noise_distribution}")
@@ -332,20 +356,12 @@ class Game:
 
         buy_orders, sell_orders = [], []
         best_bid, best_ask = None, None
-
-        n_active_buyers = len(buy_orders)
-        n_active_sellers = len(sell_orders)
-        n_active_total = len(order_list)
-
-        #bid_depth_total = float(sum(o["quantity"] for o in buy_orders)) if buy_orders else 0.0
-        #ask_depth_total = float(sum(o["quantity"] for o in sell_orders)) if sell_orders else 0.0
         bid_depth_total, ask_depth_total = 0.0, 0.0
-        #price_levels_bid = len(set(o["price"] for o in buy_orders))
-        #price_levels_ask = len(set(o["price"] for o in sell_orders))
-        price_level_bid_set, price_levels_ask_set = set(), set()
+        price_level_bid_set, price_level_ask_set = set(), set()
+
         for o in order_list:
-            px = o["price"]
-            qty  = o["quantity"]
+            px  = o["price"]
+            qty = o["quantity"]
             if o["action"] == "buy":
                 buy_orders.append(o)
                 bid_depth_total += qty
@@ -355,12 +371,15 @@ class Game:
             else:
                 sell_orders.append(o)
                 ask_depth_total += qty
-                price_levels_ask_set.add(px)
+                price_level_ask_set.add(px)
                 if best_ask is None or px < best_ask:
                     best_ask = px
-        
+
+        n_active_buyers  = len(buy_orders)
+        n_active_sellers = len(sell_orders)
+        n_active_total   = len(order_list)
         price_levels_bid = len(price_level_bid_set)
-        price_levels_ask = len(price_levels_ask_set)
+        price_levels_ask = len(price_level_ask_set)
         best_price, total_volume, trades = clear_market(order_list, previous_price=prev_price)
 
         exec_summary = defaultdict(lambda: {
@@ -396,8 +415,9 @@ class Game:
             demand_at_p = float(sum(o["quantity"] for o in buy_orders if o["price"] >= best_price))
             supply_at_p = float(sum(o["quantity"] for o in sell_orders if o["price"] <= best_price))
         else:
-            demand_at_p = 0.0
-            supply_at_p = 0.0
+            # No clearing: record total order imbalance so failed clearings can be analysed.
+            demand_at_p = float(sum(o["quantity"] for o in buy_orders))
+            supply_at_p = float(sum(o["quantity"] for o in sell_orders))
 
         self.order_history[current_round] = order_list
         self.price_history[current_round] = best_price

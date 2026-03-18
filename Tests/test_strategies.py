@@ -122,16 +122,6 @@ class TestParameterisedInformed(unittest.TestCase):
         assert_valid_order(self, order)
         self.assertTrue(is_sell(order))
 
-    def test_contrarian_reverses_direction(self):
-        buy  = parameterised_informed(signal=1.1, cash=1000.0, shares=10.0, value=100.0,
-                                      direction_bias=1.0)
-        sell = parameterised_informed(signal=1.1, cash=1000.0, shares=10.0, value=100.0,
-                                      direction_bias=-1.0)
-        assert_valid_order(self, buy)
-        assert_valid_order(self, sell)
-        self.assertTrue(is_buy(buy))
-        self.assertTrue(is_sell(sell))
-
     def test_hold_within_threshold(self):
         order = parameterised_informed(signal=1.01, cash=1000.0, shares=10.0, value=100.0,
                                        threshold=0.05)
