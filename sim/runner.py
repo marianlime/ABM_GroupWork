@@ -19,6 +19,7 @@ def play_game(
     signal_generator_noise_distribution: str,
     # --- Fundamentals ---
     S0: float | None = None,
+    gbm_volatility: float = 0.2,
     fundamental_path=None,
     seed=None
 ):
@@ -33,6 +34,7 @@ def play_game(
         distribution_data=distribution_data,
         signal_generator_noise_distribution=signal_generator_noise_distribution,
         S0=S0,
+        gbm_volatility=gbm_volatility,
         fundamental_path=fundamental_path,
         seed=seed,
     )

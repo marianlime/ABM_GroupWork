@@ -238,6 +238,7 @@ try:
             distribution_data,
             signal_generator_noise_distribution,
             S0=GBM_S0,
+            gbm_volatility=GBM_volatility,
             fundamental_path=fundamental_path,
             seed=seed,
         )
