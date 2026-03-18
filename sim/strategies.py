@@ -5,16 +5,13 @@ import numpy as np
 # Strategy functions
 # ----------------------------
 
-
-
 def zero_intelligence(signal: float, cash: float, shares: float, value: float,
-                      realized_vol: float = 0.2) -> dict:
+                      gbm_volatility: float = 0.2) -> dict:
     """
     Reference implementation only — not called during simulation.
     ZI orders are generated in bulk by Game._batch_zi_orders for performance.
 
-    realized_vol: std of recent log-returns used to set the price spread.
-                  Defaults to 0.2; in simulation this is computed from price history.
+    gbm_volatility: GBM sigma used as the log-normal spread parameter.
     """
     can_buy = cash > 0 and value > 0
     can_sell = shares > 0
@@ -29,7 +26,7 @@ def zero_intelligence(signal: float, cash: float, shares: float, value: float,
     else:
         action = "sell"
 
-    price = max(round(float(np.random.normal(value, value * realized_vol)), 2), 0.01)
+    price = max(round(float(np.random.lognormal(np.log(value), gbm_volatility)), 2), 0.01)
 
     if action == "buy":
         max_qty = cash / price if price > 0 else 0
@@ -46,12 +43,6 @@ def zero_intelligence(signal: float, cash: float, shares: float, value: float,
             "Sell": 1.0 if action == "sell" else 0.0,
             "Hold": 0.0}
 
-# look into parameters and see, slighlty arbitrary, what do they mean....
-# can we normalise all the parameters of the parameterised_informed agent
-# understable strategies
-# normalise parameters
-# generalised parameters
-
 
 def parameterised_informed(
     signal: float,
@@ -59,8 +50,8 @@ def parameterised_informed(
     shares: float,
     value: float,
     direction_bias: float = 1.0,
-    aggression: float = 1.0,
-    patience: float = 1.0,
+    qty_aggression: float = 1.0,
+    signal_aggression: float = 1.0,
     threshold: float = 0.0,
     signal_clip: float = 0.50,
     min_qty_fraction: float = 0.01,
@@ -69,10 +60,10 @@ def parameterised_informed(
     Single parameterised strategy for all informed agents.
     Evolution operates on the four continuous parameters.
 
-    direction_bias ∈ [-1, +1]  : +1 = follow signal, -1 = contrarian
-    aggression     ∈ [0.1, 5]  : scales order size per unit of conviction
-    patience       ∈ [0, 1]    : 0 = post at current value, 1 = post at full signal price
-    threshold      ∈ [0, 0.50] : no-trade band — hold when |signal − 1| < threshold
+    direction_bias   ∈ [-1, +1]  : +1 = follow signal, -1 = contrarian
+    qty_aggression  ∈ [0.1, 5]  : scales order size per unit of conviction
+    signal_agression ∈ [0, 1]    : 0 = post at current value, 1 = post at full signal price
+    threshold        ∈ [0, 0.50] : no-trade band — hold when |signal − 1| < threshold
     """
     signal = float(np.clip(signal, 1.0 - signal_clip, 1.0 + signal_clip))
     edge = signal - 1.0
@@ -91,11 +82,11 @@ def parameterised_informed(
     if action == "sell" and shares <= 0:
         return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
 
-    patient_level = 1.0 + patience * effective_edge
+    patient_level = 1.0 + signal_aggression * effective_edge
     price = max(round(value * patient_level, 2), 0.01)
 
     conviction = abs(edge)
-    fraction = min(conviction * aggression * 10.0, 1.0)
+    fraction = min(conviction * qty_aggression * 10.0, 1.0)
 
     if action == "buy":
         max_qty = cash / price if price > 0 else 0.0

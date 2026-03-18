@@ -33,6 +33,7 @@ class Game:
         signal_generator_noise_distribution: str,
         # --- Fundamentals ---
         S0: float | None = None,
+        gbm_volatility: float = 0.2,
         # --- stock_path ---
         fundamental_path=None,
         seed=None
@@ -55,6 +56,7 @@ class Game:
         self.total_initial_shares = total_initial_shares
         self.total_initial_cash = total_initial_cash
         self.S0 = S0
+        self.gbm_volatility = float(gbm_volatility)
         self.run_id = run_id
 
         self.noise_parameter_distribution_type = noise_parameter_distribution_type
@@ -143,9 +145,8 @@ class Game:
         1. Price anchor  : uses the previous clearing price (public market info) rather
                            than the fundamental value, so ZI agents carry no implicit
                            fundamental knowledge.
-        2. Adaptive price std: spread is price_ref * realized_vol, where realized_vol
-                           is the std of log-returns over the last 20 clearing prices.
-                           Falls back to 0.2 when fewer than 2 prices are available.
+        2. Log-normal spread: prices drawn from lognormal(log(price_ref), gbm_volatility),
+                           i.e. price_ref * exp(σZ) where σ is the GBM volatility.
         3. Hold probability: each agent independently abstains with probability
                            _zi_hold_prob, giving ZI agents a genuine hold option.
         4. Quantity cap  : order sizes are capped at the initial per-agent endowment
@@ -170,19 +171,8 @@ class Game:
         # Fall back to S0_effective when no prior clearing price exists.
         price_ref = float(prev_price) if prev_price is not None else self.S0_effective
 
-        # Realized volatility from recent clearing prices (std of log returns).
-        # Falls back to 0.2 when fewer than 2 cleared prices are available.
-        _vol_window = 20
-        _recent_prices = [p for _, p in sorted(self.price_history.items())[-_vol_window:]]
-        if len(_recent_prices) >= 2:
-            _log_returns = np.diff(np.log(np.maximum(_recent_prices, 1e-12)))
-            realized_vol = float(np.clip(np.std(_log_returns), 0.01, 1.0))
-        else:
-            realized_vol = 0.2
-
-        price_std = price_ref * realized_vol
         prices = np.maximum(
-            np.round(self._zi_rng.normal(price_ref, price_std, n), 2),
+            np.round(self._zi_rng.lognormal(np.log(price_ref), self.gbm_volatility, n), 2),
             0.01
         )
 
