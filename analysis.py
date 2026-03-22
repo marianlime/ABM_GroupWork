@@ -1,8 +1,13 @@
+from pathlib import Path
+import re
+
 import numpy as np
 import pandas as pd
 import matplotlib
-matplotlib.use("TkAgg")
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from numba import njit
+
 
 # Canonical order and bounds for the four learnable parameters.
 # Keep in sync with PARAM_BOUNDS in main.py.
@@ -15,6 +20,7 @@ PARAM_BOUNDS = {
 PARAM_NAMES = list(PARAM_BOUNDS.keys())
 
 _ROLL = 10   # smoothing window (generations) used throughout
+_PLOT_OUTPUT_DIR = Path("analysis_outputs")
 
 
 # ----------------------------
@@ -24,43 +30,75 @@ _ROLL = 10   # smoothing window (generations) used throughout
 
 def compute_strategy_mean_wealth(final_score, agents) -> dict:
     """Mean terminal wealth keyed by strategy type."""
-    wealth_by_type = {}
-    for agent_id, wealth in final_score:
-        ttype = agents[agent_id].trader_type
-        wealth_by_type.setdefault(ttype, []).append(float(wealth))
-    return {s: float(np.mean(v)) for s, v in wealth_by_type.items()}
+    agent_types = {aid: agent.trader_type for aid, agent in agents.items()}
+    type_list = list(set(agent_types.values()))
+    type_idx = {t: i for i, t in enumerate(type_list)}
+    agent_type_indices = np.array([type_idx[agent_types[aid]] for aid, _ in final_score])
+    wealths = np.array([w for _, w in final_score])
+    means = _compute_strategy_mean_wealth_numba(agent_type_indices, wealths, len(type_list))
+    return {type_list[i]: means[i] for i in range(len(type_list))}
 
+@njit
+def _compute_strategy_mean_wealth_numba(agent_type_indices, wealths, n_types):
+    sums = np.zeros(n_types)
+    counts = np.zeros(n_types)
+    for i in range(len(agent_type_indices)):
+        idx = agent_type_indices[i]
+        sums[idx] += wealths[i]
+        counts[idx] += 1
+    means = np.empty(n_types)
+    for i in range(n_types):
+        if counts[i] > 0:
+            means[i] = sums[i] / counts[i]
+        else:
+            means[i] = np.nan
+    return means
 
 def compute_strategy_mean_info_param(agents) -> dict:
     """Mean info_param keyed by strategy type."""
-    ip_by_type = {}
+    grouped_info_params = {}
     for agent in agents.values():
-        ip_by_type.setdefault(agent.trader_type, []).append(float(agent.info_param))
-    return {s: float(np.mean(v)) for s, v in ip_by_type.items()}
+        grouped_info_params.setdefault(agent.trader_type, []).append(float(agent.info_param))
+
+    return {
+        trader_type: float(np.mean(values)) if values else np.nan
+        for trader_type, values in grouped_info_params.items()
+    }
+
 
 
 def compute_strategy_param_stats(agents) -> dict:
     """
     Mean and std of each learnable parameter across all parameterised_informed agents.
-
     Returns:
-        {"direction_bias": {"mean": float, "std": float}, ...}
+        {"qty_aggression": {"mean": float, "std": float}, ...}
     """
-    param_values: dict[str, list[float]] = {p: [] for p in PARAM_NAMES}
-    for agent in agents.values():
-        if agent.trader_type == "parameterised_informed":
-            for param in PARAM_NAMES:
-                val = agent.strategy_params.get(param)
-                if val is not None:
-                    param_values[param].append(float(val))
+    informed_agents = [
+        agent for agent in agents.values()
+        if agent.trader_type == "parameterised_informed"
+    ]
 
-    result = {}
-    for param, vals in param_values.items():
-        if vals:
-            result[param] = {"mean": float(np.mean(vals)), "std": float(np.std(vals))}
+    param_stats = {}
+    for param in PARAM_NAMES:
+        values = []
+        for agent in informed_agents:
+            val = agent.strategy_params.get(param)
+            if val is not None:
+                values.append(float(val))
+
+        if values:
+            values_np = np.array(values, dtype=float)
+            param_stats[param] = {
+                "mean": float(np.mean(values_np)),
+                "std": float(np.std(values_np)),
+            }
         else:
-            result[param] = {"mean": np.nan, "std": np.nan}
-    return result
+            param_stats[param] = {
+                "mean": np.nan,
+                "std": np.nan,
+            }
+
+    return param_stats
 
 
 # ----------------------------
@@ -76,6 +114,28 @@ def _axes_flat(fig, axes):
 
 def _colour_cycle():
     return [c["color"] for c in plt.rcParams["axes.prop_cycle"]]
+
+
+def _safe_slug(text: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")
+    return slug or "plot"
+
+
+def _save_and_close_plot(name: str) -> None:
+    _PLOT_OUTPUT_DIR.mkdir(exist_ok=True)
+    plt.savefig(_PLOT_OUTPUT_DIR / f"{_safe_slug(name)}.png", dpi=150, bbox_inches="tight")
+    plt.close()
+
+
+def _format_display_df(df: pd.DataFrame, display_cols: list[str]) -> pd.DataFrame:
+    display_df = df.loc[:, display_cols].copy()
+    if "type" in display_df.columns:
+        zi_mask = display_df["type"] == "zi"
+        for col in ["qty_aggression", "signal_aggression", "threshold", "signal_clip"]:
+            if col in display_df.columns:
+                display_df[col] = display_df[col].astype(object)
+                display_df.loc[zi_mask, col] = ""
+    return display_df
 
 
 # ----------------------------
@@ -115,7 +175,7 @@ def analyse_game_results(
     # ── Build per-agent results table ────────────────────────────────────────
     _use_rolling = bool(rolling_games and rolling_scores)
     _n_window    = len(rolling_games) if _use_rolling else 1
-    _data_label  = f"rolling {_n_window}-generation window" if _use_rolling else "final generation"
+    _data_label  = f"rolling {_n_window}-generation window" if (_use_rolling and _n_window > 1) else "final generation"
 
     if _use_rolling:
         rows = []
@@ -162,11 +222,13 @@ def analyse_game_results(
                     "wealth_final"]
     display_cols = [c for c in display_cols if c in df.columns]
 
+    display_df = _format_display_df(df, display_cols)
+
     print(f"\n=== Top 10 (by wealth, {_data_label}) ===")
-    print(df.loc[:9, display_cols].to_string(index=False))
+    print(display_df.loc[:9].to_string(index=False))
 
     print(f"\n=== Bottom 10 (by wealth, {_data_label}) ===")
-    print(df.loc[max(len(df) - 10, 0):, display_cols].to_string(index=False))
+    print(display_df.loc[max(len(display_df) - 10, 0):].to_string(index=False))
 
     print(f"\n=== Summary by type ({_data_label}) ===")
     print(df.groupby("type")["wealth_final"].agg(["count", "mean", "std", "min", "median", "max"]).to_string())
@@ -185,7 +247,7 @@ def analyse_game_results(
         try:
             non_zi["info_bin"] = pd.qcut(non_zi["info_param"], q=5, duplicates="drop")
             print(f"\n=== Non-ZI traders: wealth by info_param quintile ({_data_label}) ===")
-            print(non_zi.groupby("info_bin")["wealth_final"].agg(
+            print(non_zi.groupby("info_bin", observed=False)["wealth_final"].agg(
                 ["count", "mean", "std", "min", "median", "max"]
             ).to_string())
         except Exception as e:
@@ -217,7 +279,7 @@ def analyse_game_results(
     plt.title(f"{title_prefix}Wealth Distribution by Type ({_data_label})")
     plt.legend()
     plt.tight_layout()
-    plt.show()
+    _save_and_close_plot(f"{title_prefix}wealth_distribution_{_data_label}")
 
     # ----- 2. Parameter distributions -----
     param_plot_df   = (informed_df[informed_df["wealth_final"].notna()].copy()
@@ -250,7 +312,7 @@ def analyse_game_results(
 
         fig.suptitle(f"{title_prefix}Evolved Parameter Distribution ({_data_label})")
         plt.tight_layout()
-        plt.show()
+        _save_and_close_plot(f"{title_prefix}parameter_distribution_{_data_label}")
 
     # ----- 3. Parameter & wealth correlation heatmap (all generations) -----
     if (generation_counts_df is not None and not generation_counts_df.empty):
@@ -287,7 +349,7 @@ def analyse_game_results(
             ax.set_title(f"{title_prefix}Parameter & Wealth Correlation Matrix "
                          f"(all {n_gens} generations)")
             plt.tight_layout()
-            plt.show()
+            _save_and_close_plot(f"{title_prefix}parameter_wealth_correlation_matrix")
 
     # =========================================================================
     # EVOLUTIONARY METRICS OVER GENERATIONS
@@ -318,7 +380,7 @@ def analyse_game_results(
                          f"({_ROLL}-gen rolling mean)")
             ax.legend(title="Parameter")
             plt.tight_layout()
-            plt.show()
+            _save_and_close_plot(f"{title_prefix}parameter_means_over_generations")
 
         # ----- 5. Normalised parameter diversity -----
         std_param_cols = [f"std_{p}" for p in PARAM_NAMES
@@ -339,7 +401,7 @@ def analyse_game_results(
             ax.set_title(f"{title_prefix}Normalised Parameter Diversity Over Generations")
             ax.legend(title="Parameter")
             plt.tight_layout()
-            plt.show()
+            _save_and_close_plot(f"{title_prefix}parameter_diversity_over_generations")
 
         # ----- 6. Informed/ZI wealth premium -----
         w_inf = generation_counts_df.get("mean_wealth_parameterised_informed")
@@ -359,7 +421,7 @@ def analyse_game_results(
             ax.set_title(f"{title_prefix}Informed Agents' Wealth Premium Over ZI (%)")
             ax.legend()
             plt.tight_layout()
-            plt.show()
+            _save_and_close_plot(f"{title_prefix}wealth_premium_over_generations")
 
             print(f"\nFinal-generation informed/ZI wealth premium: {raw_pct.iloc[-1]:.1f}%  "
                   f"({_ROLL}-gen smoothed: {smoothed.iloc[-1]:.1f}%)")
@@ -379,7 +441,7 @@ def analyse_game_results(
             ax.set_title(f"{title_prefix}Mean info_param Over Generations")
             ax.legend(title="Strategy Type")
             plt.tight_layout()
-            plt.show()
+            _save_and_close_plot(f"{title_prefix}mean_info_param_over_generations")
 
     # =========================================================================
     # ROUND-BY-ROUND PLOTS  (averaged over rolling window)
@@ -432,7 +494,7 @@ def analyse_game_results(
         ax.set_title(f"{title_prefix}Wealth Trajectories by Strategy ({_data_label})")
         ax.legend(title="Strategy Type")
         plt.tight_layout()
-        plt.show()
+        _save_and_close_plot(f"{title_prefix}wealth_trajectories_{_data_label}")
 
     # ----- 9. Clip−threshold gap over generations -----
     if (generation_counts_df is not None and not generation_counts_df.empty
@@ -451,7 +513,7 @@ def analyse_game_results(
         ax.set_title(f"{title_prefix}Clip−Threshold Gap Over Generations (positive = agents can trade)")
         ax.legend()
         plt.tight_layout()
-        plt.show()
+        _save_and_close_plot(f"{title_prefix}clip_threshold_gap_over_generations")
 
     # ----- 10. Mean volume over generations -----
     if (generation_counts_df is not None and not generation_counts_df.empty
@@ -468,6 +530,6 @@ def analyse_game_results(
         ax.set_title(f"{title_prefix}Mean Volume Over Generations ({_ROLL}-gen smooth)")
         ax.legend()
         plt.tight_layout()
-        plt.show()
+        _save_and_close_plot(f"{title_prefix}mean_volume_over_generations")
 
     return df

@@ -22,6 +22,7 @@ entirely inside numpy's C layer.
 """
 
 import numpy as np
+from numba import njit
 
 # ── Fixed market configuration ────────────────────────────────────────────────
 # These are not exposed as run parameters — edit here to change market behaviour.
@@ -110,41 +111,54 @@ def allocate_trades(buys, sells, price, total_volume):
     """
     Distribute total_volume among eligible orders using pro-rata rationing.
     Fills are kept as floats to stay consistent with the rest of the codebase.
+    Optimized with Numba for batch allocation.
     """
-    trades = []
-
     eligible_buys  = [o for o in buys  if o['price'] >= price]
-    total_buy_qty  = sum(o['quantity'] for o in eligible_buys)
-
     eligible_sells = [o for o in sells if o['price'] <= price]
-    total_sell_qty = sum(o['quantity'] for o in eligible_sells)
 
-    if total_buy_qty <= 0 or total_sell_qty <= 0:
+    if not eligible_buys or not eligible_sells:
         return []
 
-    for order in eligible_buys:
-        fill = round(total_volume * order['quantity'] / total_buy_qty, 6)  # ← float, not int
-        fill = min(fill, order['quantity'])
+    buy_agent_ids = np.array([o['agent_id'] for o in eligible_buys], dtype=int)
+    buy_qtys      = np.array([o['quantity'] for o in eligible_buys], dtype=float)
+    sell_agent_ids = np.array([o['agent_id'] for o in eligible_sells], dtype=int)
+    sell_qtys      = np.array([o['quantity'] for o in eligible_sells], dtype=float)
+
+    trades = []
+    buy_fills = _allocate_fills_numba(total_volume, buy_qtys)
+    for i in range(len(buy_agent_ids)):
+        fill = min(buy_fills[i], buy_qtys[i])
         if fill > 0:
             trades.append({
-                'agent_id': order['agent_id'],
+                'agent_id': int(buy_agent_ids[i]),
                 'quantity': float(fill),
                 'price':    float(price),
-                'action':     'buy'
+                'action':   'buy'
             })
 
-    for order in eligible_sells:
-        fill = round(total_volume * order['quantity'] / total_sell_qty, 6)  # ← float, not int
-        fill = min(fill, order['quantity'])
+    sell_fills = _allocate_fills_numba(total_volume, sell_qtys)
+    for i in range(len(sell_agent_ids)):
+        fill = min(sell_fills[i], sell_qtys[i])
         if fill > 0:
             trades.append({
-                'agent_id': order['agent_id'],
+                'agent_id': int(sell_agent_ids[i]),
                 'quantity': float(fill),
                 'price':    float(price),
-                'action':     'sell'
+                'action':   'sell'
             })
 
     return trades
+
+@njit
+def _allocate_fills_numba(total_volume, qtys):
+    n = len(qtys)
+    fills = np.zeros(n)
+    total_qty = qtys.sum()
+    if total_qty <= 0:
+        return fills
+    for i in range(n):
+        fills[i] = round(total_volume * qtys[i] / total_qty, 6)
+    return fills
 
 
 # ── Example usage ───────────────────────────-────────────────────────────────

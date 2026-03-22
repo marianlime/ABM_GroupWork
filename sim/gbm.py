@@ -1,6 +1,7 @@
 import numpy as np
 import hashlib
 from typing import Optional
+from numba import njit
 
 
 def rng_from_string(seed):
@@ -10,6 +11,14 @@ def rng_from_string(seed):
     seed = seed % (2**32)
     return np.random.default_rng(seed)
 
+
+
+@njit
+def simulate_gbm_numba(S_0, n_rounds, increments):
+    logS = np.empty(n_rounds + 1)
+    logS[0] = np.log(S_0)
+    logS[1:] = logS[0] + np.cumsum(increments)
+    return np.exp(logS)
 
 def simulate_gbm(S_0: float, volatility: float, drift: float, n_rounds: int, seed: Optional[str] = None):
     if S_0 <= 0 or not np.isfinite(S_0):
@@ -25,9 +34,4 @@ def simulate_gbm(S_0: float, volatility: float, drift: float, n_rounds: int, see
 
     rng = rng_from_string(seed)
     increments = (drift - 0.5 * volatility**2) + volatility * rng.standard_normal(n_rounds)
-
-    logS = np.empty(n_rounds + 1)
-    logS[0] = np.log(S_0)
-    logS[1:] = logS[0] + np.cumsum(increments)
-
-    return np.exp(logS)
+    return simulate_gbm_numba(S_0, n_rounds, increments)

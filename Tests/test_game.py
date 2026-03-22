@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from sim.game import Game, _noise_seed_from_run_id, _zi_seed_from_run_id
+from sim.game import Game, _noise_seed_from_generation_id, _zi_seed_from_generation_id
 
 
 def _make_game(pop=None, n_rounds=5):
@@ -18,8 +18,9 @@ def _make_game(pop=None, n_rounds=5):
         n_rounds=n_rounds,
         total_initial_shares=60,
         total_initial_cash=6000,
-        run_id="TEST_RUN_01",
-        noise_parameter_distribution_type="uniform",
+        experiment_id="TEST_EXP_01",
+        generation_id=1,
+        info_param_distribution_type="uniform",
         distribution_data={"low": 0.05, "high": 0.3},
         signal_generator_noise_distribution="lognormal",
         S0=100,
@@ -33,13 +34,13 @@ def _make_game(pop=None, n_rounds=5):
 class TestSeedHelpers:
 
     def test_noise_seed_stable(self):
-        assert _noise_seed_from_run_id("A") == _noise_seed_from_run_id("A")
+        assert _noise_seed_from_generation_id("EXP", 1) == _noise_seed_from_generation_id("EXP", 1)
 
     def test_zi_seed_stable(self):
-        assert _zi_seed_from_run_id("A") == _zi_seed_from_run_id("A")
+        assert _zi_seed_from_generation_id("EXP", 1) == _zi_seed_from_generation_id("EXP", 1)
 
     def test_noise_and_zi_seeds_differ(self):
-        assert _noise_seed_from_run_id("X") != _zi_seed_from_run_id("X")
+        assert _noise_seed_from_generation_id("EXP", 1) != _zi_seed_from_generation_id("EXP", 1)
 
 
 # Game construction

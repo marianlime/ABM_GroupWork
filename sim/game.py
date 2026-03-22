@@ -1,40 +1,41 @@
 from collections import Counter, defaultdict
-from .noise_signal import assign_noise_parameter_set
+from .noise_signal import assign_info_param_set
 from .trader import Trader
 from .market import clear_market, TRANSACTION_COST_RATE
 import hashlib
 import numpy as np
 
 
-def _noise_seed_from_run_id(run_id: str) -> int:
-    """Derive a stable integer seed from the run ULID so noise parameter
-    assignment is reproducible for a given run."""
-    return int(hashlib.sha256(f"noise_{run_id}".encode()).hexdigest()[:16], 16)
+def _noise_seed_from_generation_id(experiment_id: str, generation_id: int) -> int:
+    """Derive a stable integer seed from the experiment/generation identity so noise parameter
+    assignment is reproducible for a given generation."""
+    return int(hashlib.sha256(f"noise_{experiment_id}_{generation_id}".encode()).hexdigest()[:16], 16)
 
 
-def _zi_seed_from_run_id(run_id: str) -> int:
+def _zi_seed_from_generation_id(experiment_id: str, generation_id: int) -> int:
     """Derive a separate stable seed for the ZI-agent RNG, distinct from the
     noise-parameter seed so the two random streams are independent."""
-    return int(hashlib.sha256(f"zi_{run_id}".encode()).hexdigest()[:16], 16)
+    return int(hashlib.sha256(f"zi_{experiment_id}_{generation_id}".encode()).hexdigest()[:16], 16)
 
 
-def _signal_seed_from_run_id(run_id: str) -> int:
+def _signal_seed_from_generation_id(experiment_id: str, generation_id: int) -> int:
     """Derive a stable seed for the informed-agent signal RNG, independent of
     the noise-parameter and ZI seeds so all three streams are isolated."""
-    return int(hashlib.sha256(f"signal_{run_id}".encode()).hexdigest()[:16], 16)
+    return int(hashlib.sha256(f"signal_{experiment_id}_{generation_id}".encode()).hexdigest()[:16], 16)
 
 
 class Game:
     def __init__(
         self,
         population_spec: list[dict],
-        # --- Run / Market ---
+        # --- Generation / Market ---
         n_rounds: int,
         total_initial_shares: float,
         total_initial_cash: float,
-        run_id: str,
+        experiment_id: str,
+        generation_id: int,
         # --- Signal / Noise ---
-        noise_parameter_distribution_type: str,
+        info_param_distribution_type: str,
         distribution_data: dict,
         signal_generator_noise_distribution: str,
         # --- Fundamentals ---
@@ -63,9 +64,10 @@ class Game:
         self.total_initial_cash = total_initial_cash
         self.S0 = S0
         self.gbm_volatility = float(gbm_volatility)
-        self.run_id = run_id
+        self.experiment_id = experiment_id
+        self.generation_id = int(generation_id)
 
-        self.noise_parameter_distribution_type = noise_parameter_distribution_type
+        self.info_param_distribution_type = info_param_distribution_type
         self.distribution_data = distribution_data
         self.signal_noise_distribution = signal_generator_noise_distribution
 
@@ -78,10 +80,10 @@ class Game:
         self.price_history = {}
 
         n_informed = sum(1 for a in self.population_spec if a["trader_type"] != "zi")
-        noise_seed = _noise_seed_from_run_id(self.run_id) if self.run_id else None
-        self.noise_parameter_set = assign_noise_parameter_set(
+        noise_seed = _noise_seed_from_generation_id(self.experiment_id, self.generation_id)
+        self.info_param_set = assign_info_param_set(
             n_agents=n_informed,
-            noise_parameter_distribution_type=self.noise_parameter_distribution_type,
+            info_param_distribution_type=self.info_param_distribution_type,
             distribution_data=self.distribution_data,
             seed=noise_seed
         )
@@ -102,7 +104,7 @@ class Game:
             if "info_param" in agent_spec:
                 info_param = float(agent_spec["info_param"])
             elif trader_type != "zi":
-                info_param = float(self.noise_parameter_set[informed_idx])
+                info_param = float(self.info_param_set[informed_idx])
                 informed_idx += 1
             else:
                 info_param = 0.0
@@ -133,16 +135,16 @@ class Game:
         ]
 
         # Dedicated, reproducible RNG for ZI order generation — seeded from the
-        # run ULID so results are repeatable, and isolated from the noise-parameter
+        # generation ULID so results are repeatable, and isolated from the noise-parameter
         # RNG so the two streams don't interfere with each other.
         self._zi_rng = np.random.default_rng(
-            _zi_seed_from_run_id(self.run_id) if self.run_id else None
+            _zi_seed_from_generation_id(self.experiment_id, self.generation_id)
         )
 
         # Dedicated, reproducible RNG for informed-agent signal generation —
         # isolated from both the ZI and noise-parameter streams.
         self._signal_rng = np.random.default_rng(
-            _signal_seed_from_run_id(self.run_id) if self.run_id else None
+            _signal_seed_from_generation_id(self.experiment_id, self.generation_id)
         )
 
         # Initial per-agent endowment — used to cap ZI order sizes so that agents
@@ -169,7 +171,7 @@ class Game:
         4. Quantity cap  : order sizes are capped at the initial per-agent endowment
                            (cash_per_agent / shares_per_agent) so accumulated wealth
                            does not amplify ZI order flow over generations.
-        5. Seeded RNG    : uses self._zi_rng (np.random.Generator seeded from run_id)
+        5. Seeded RNG    : uses self._zi_rng (np.random.Generator seeded from generation_id)
                            so ZI draws are fully reproducible and isolated from the
                            noise-parameter RNG stream.
 
@@ -326,7 +328,8 @@ class Game:
             aggressiveness = float(abs(signal - 1.0))
 
             agent_round_records[agent_id] = {
-                "run_id": self.run_id,
+                "experiment_id": self.experiment_id,
+                "generation_id": self.generation_id,
                 "round_number": current_round,
                 "agent_id": agent_id,
                 "signal": float(signal),
@@ -423,7 +426,8 @@ class Game:
         self.price_history[current_round] = best_price
 
         self.market_round_records.append({
-            "run_id": self.run_id,
+            "experiment_id": self.experiment_id,
+            "generation_id": self.generation_id,
             "round_number": current_round,
             "p_t": float(best_price) if best_price is not None else None,
             "best_bid": float(best_bid) if best_bid is not None else None,
