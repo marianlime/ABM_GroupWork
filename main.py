@@ -45,8 +45,8 @@ DEFAULT_EXPERIMENT_CONFIG = {
     "experiment_seed": 587756769879879879879,
     "n_zi_agents": 65,
     "n_parameterised_agents": 35,
-    "n_generations": 100,
-    "n_rounds": 10,
+    "n_generations": 200,
+    "n_rounds": 25,
     "total_initial_cash": 1000,
     "total_initial_shares": 10,
     "GBM_S0": 100,
@@ -66,7 +66,7 @@ DEFAULT_EXPERIMENT_CONFIG = {
         "default_strategy_params": DEFAULT_STRATEGY_PARAMS,
         "frozen_params": set(),
     },
-    "rolling_n": 1,
+    "rolling_n": 10,
 }
 
 
