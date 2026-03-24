@@ -124,7 +124,7 @@ class TestParameterisedInformed(unittest.TestCase):
 
     def test_hold_within_threshold(self):
         order = parameterised_informed(signal=1.01, cash=1000.0, shares=10.0, value=100.0,
-                                       threshold=0.05)
+                                       threshold=0.05, info_param=1.0)
         assert_valid_order(self, order)
         self.assertTrue(is_hold(order))
 

@@ -53,7 +53,8 @@ def test_hold_when_no_resources():
 
 
 def test_threshold_causes_hold():
-    t = Trader(agent_id=6, cash=1000, shares=10, trader_type="parameterised_informed",
+    t = Trader(agent_id=6, cash=1000, shares=10, info_param=1.0,
+               trader_type="parameterised_informed",
                strategy_params={"qty_aggression": 1.0, "signal_aggression": 1.0, "threshold": 0.10})
     order = t.place_order(signal=1.05, value=100)
     assert order is not None and order["Hold"] == 1.0

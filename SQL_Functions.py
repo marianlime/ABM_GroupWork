@@ -1,3 +1,8 @@
+"""
+DuckDB persistence layer: individual insert/update helpers for every table in
+the schema, plus AsyncDuckDBWriter for non-blocking background writes.
+"""
+
 import json
 import queue
 import threading
@@ -6,6 +11,7 @@ import duckdb
 
 
 def _json_default(value):
+    """JSON serialiser fallback that converts sets to sorted lists."""
     if isinstance(value, set):
         return sorted(value)
     raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
@@ -37,6 +43,7 @@ def insert_experiment_row(con,
                           algorithm_name,
                           algorithm_params,
                           bias):
+    """Insert a single row into the experiments table, skipping columns absent from the schema."""
     experiment_columns = {
         row[1] for row in con.execute("PRAGMA table_info('experiments')").fetchall()
     }
@@ -120,6 +127,7 @@ def insert_generation_row(con,
                           completion_time,
                           generation_status,
                           generation_progress):
+    """Insert a new row into the generations table with initial status and progress."""
     con.execute("""
         INSERT INTO generations (
             experiment_id,
@@ -147,6 +155,7 @@ def update_generation_param_means(con,
                                   mean_signal_aggression,
                                   mean_threshold,
                                   mean_signal_clip):
+    """Update the mean strategy-parameter columns on an existing generations row."""
     con.execute("""
         UPDATE generations
         SET mean_qty_aggression = ?,
@@ -165,6 +174,7 @@ def update_generation_param_means(con,
 
 
 def insert_gbm_config_row(con, experiment_id, generation_id, S0, volatility, drift, seed):
+    """Insert a GBM configuration record for a given experiment and generation."""
     con.execute(
         """INSERT INTO gbm_config VALUES (?, ?, ?, ?, ?, ?)""",
         [experiment_id, int(generation_id), S0, drift, volatility, seed]
@@ -172,6 +182,7 @@ def insert_gbm_config_row(con, experiment_id, generation_id, S0, volatility, dri
 
 
 def insert_fundamental_series(con, experiment_id, generation_id, fundamental_series):
+    """Bulk-insert the fundamental price path for a generation into fundamental_series."""
     data = []
     for r, p in fundamental_series:
         if isinstance(p, tuple):
@@ -188,6 +199,7 @@ def insert_fundamental_series(con, experiment_id, generation_id, fundamental_ser
 
 
 def insert_agent_population(con, experiment_id, generation_id, agents):
+    """Bulk-insert all agent endowment and parameter records for a generation."""
     data = []
     for agent_id, agent in agents.items():
         group_label = "noise" if agent.trader_type == "zi" else "informed"
@@ -233,6 +245,7 @@ def insert_agent_population(con, experiment_id, generation_id, agents):
 
 
 def insert_agent_round_rows(con, records):
+    """Bulk-insert per-agent, per-round trading records into agent_round."""
     data = []
     for r in records:
         data.append((
@@ -289,6 +302,7 @@ def update_generation_progress(con,
                                generation_progress,
                                generation_status=None,
                                completion_time=None):
+    """Update progress and optionally status/completion_time on a generations row."""
     if generation_status is not None and completion_time is not None:
         con.execute("""
         UPDATE generations
@@ -312,6 +326,7 @@ def update_generation_progress(con,
 
 
 def insert_market_round_rows(con, records):
+    """Bulk-insert per-round market clearing records into market_round."""
     data = []
     for r in records:
         data.append((
@@ -374,6 +389,7 @@ def persist_generation_bundle(con,
                               mean_signal_aggression,
                               mean_threshold,
                               mean_signal_clip):
+    """Atomically write all generation data (GBM config, fundamental path, agents, market and agent rounds) in a single transaction."""
     con.execute("BEGIN TRANSACTION")
     try:
         insert_gbm_config_row(con, experiment_id, generation_id, S0, volatility, drift, seed)
@@ -405,6 +421,8 @@ def persist_generation_bundle(con,
 
 
 class AsyncDuckDBWriter:
+    """Serialises database writes to a background thread so the simulation loop is never blocked."""
+
     def __init__(self, db_path: str, max_queue_size: int = 2):
         self.db_path = db_path
         self._queue: queue.Queue = queue.Queue(maxsize=max_queue_size)

@@ -1,3 +1,8 @@
+"""
+Evolutionary algorithms (truncation, tournament, fitness-proportionate) and
+population-management helpers for the agent-based market simulation.
+"""
+
 from collections import Counter
 import random
 
@@ -131,6 +136,7 @@ def _make_child(
             else:
                 val = max(p_lo, min(p_hi, val + rng.gauss(0.0, p_std)))
             mutated_params[param] = val
+
         child["strategy_params"] = mutated_params
 
     return child
@@ -180,7 +186,7 @@ def evolve_truncation(
                   frozen_params=frozen_params)
 
     children = [_make_child(rng.choice(parent_pool), **kwargs) for _ in range(bottom_k)]
-    return [_make_child(a, **kwargs) for a in survivors] + children
+    return list(survivors) + children
 
 
 def evolve_tournament(
@@ -229,7 +235,7 @@ def evolve_tournament(
         winner = max(rng.sample(ranked, k=tournament_size), key=lambda x: x["wealth"])
         children.append(_make_child(winner, **kwargs))
 
-    return [_make_child(a, **kwargs) for a in survivors] + children
+    return list(survivors) + children
 
 
 def evolve_fitness_proportionate(
@@ -278,7 +284,7 @@ def evolve_fitness_proportionate(
 
     children = [_make_child(rng.choices(ranked, weights=weights, k=1)[0], **kwargs)
                 for _ in range(bottom_k)]
-    return [_make_child(a, **kwargs) for a in survivors] + children
+    return list(survivors) + children
 
 
 def evolve_population(
@@ -288,9 +294,34 @@ def evolve_population(
     algorithm_params: dict,
     rng: random.Random | None = None,
 ) -> list[dict]:
-    """Dispatch function for evolutionary update rules."""
+    """Dispatch function for evolutionary update rules.
+
+    Supports population-scaled replacement via ``bottom_k_fraction`` and
+    ``top_n_fraction`` in algorithm_params.  When present these override the
+    fixed ``bottom_k`` / ``top_n`` counts and scale with the number of
+    parameterised_informed agents currently in the population, so that larger
+    informed populations automatically evolve more agents each generation.
+    """
     param_bounds            = algorithm_params["param_bounds"]
     default_strategy_params = algorithm_params["default_strategy_params"]
+
+    # Count informed agents to support population-scaled bottom_k / top_n.
+    n_informed = sum(
+        1 for a in agents.values()
+        if a.trader_type == "parameterised_informed"
+    )
+
+    bottom_k_fraction = algorithm_params.get("bottom_k_fraction")
+    if bottom_k_fraction is not None:
+        bottom_k = max(1, round(n_informed * bottom_k_fraction))
+    else:
+        bottom_k = algorithm_params["bottom_k"]
+
+    top_n_fraction = algorithm_params.get("top_n_fraction")
+    if top_n_fraction is not None:
+        top_n = max(1, round(n_informed * top_n_fraction))
+    else:
+        top_n = algorithm_params.get("top_n", bottom_k)
 
     mutation_kwargs = {
         "mutation_rate":           algorithm_params.get("mutation_rate", 0.02),
@@ -304,15 +335,15 @@ def evolve_population(
     if algorithm_name == "truncation":
         return evolve_truncation(
             final_score=final_score, agents=agents,
-            top_n=algorithm_params["top_n"],
-            bottom_k=algorithm_params["bottom_k"],
+            top_n=top_n,
+            bottom_k=bottom_k,
             rng=rng, **mutation_kwargs,
         )
 
     if algorithm_name == "tournament":
         return evolve_tournament(
             final_score=final_score, agents=agents,
-            bottom_k=algorithm_params["bottom_k"],
+            bottom_k=bottom_k,
             tournament_size=algorithm_params["tournament_size"],
             rng=rng, **mutation_kwargs,
         )
@@ -320,7 +351,7 @@ def evolve_population(
     if algorithm_name == "fitness_proportionate":
         return evolve_fitness_proportionate(
             final_score=final_score, agents=agents,
-            bottom_k=algorithm_params["bottom_k"],
+            bottom_k=bottom_k,
             rng=rng,
             epsilon=algorithm_params.get("epsilon", 1e-9),
             **mutation_kwargs,
@@ -330,6 +361,7 @@ def evolve_population(
 
 
 def _validate_strategy_counts(strategy_counts: dict[str, int]) -> None:
+    """Raise TypeError or ValueError if strategy_counts contains unknown types or invalid counts."""
     if not isinstance(strategy_counts, dict):
         raise TypeError("strategy_counts must be a dict[str, int]")
     for trader_type, count in strategy_counts.items():
@@ -342,6 +374,7 @@ def _validate_strategy_counts(strategy_counts: dict[str, int]) -> None:
 
 
 def _validate_population_spec(population_spec: list[dict]) -> None:
+    """Raise TypeError or ValueError if any agent dict in population_spec is malformed."""
     if not isinstance(population_spec, list):
         raise TypeError("population_spec must be a list[dict]")
     for i, agent in enumerate(population_spec):

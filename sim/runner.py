@@ -1,7 +1,13 @@
+"""
+High-level runner that constructs a Game, steps through all rounds, computes
+time-averaged mark-to-market wealth, and wraps failures in a typed error.
+"""
+
 from .game import Game
 
 
 class GameExecutionError(RuntimeError):
+    """Raised when a game fails mid-run, preserving the round at which failure occurred."""
     def __init__(self, current_round: int, n_rounds: int):
         super().__init__(f"Game failed at round {current_round} of {n_rounds}")
         self.current_round = current_round
@@ -9,24 +15,32 @@ class GameExecutionError(RuntimeError):
 
 
 def play_game(
-    # --- Population ---
+    # ── Population ───────────────────────────────────────────────────────────
     population_spec: list[dict],
-    # --- Generation / Market ---
+    # ── Generation / Market ──────────────────────────────────────────────────
     n_rounds: int,
     total_initial_shares: float,
     total_initial_cash: float,
     experiment_id: str,
     generation_id: int,
-    # --- Signal / Noise ---
+    # ── Signal / Noise ───────────────────────────────────────────────────────
     info_param_distribution_type: str,
     distribution_data: dict,
     signal_generator_noise_distribution: str,
-    # --- Fundamentals ---
+    # ── Fundamentals ─────────────────────────────────────────────────────────
     S0: float | None = None,
     gbm_volatility: float = 0.2,
     fundamental_path=None,
     seed=None
 ):
+    """
+    Run a single generation of the market simulation and return agent fitness scores.
+
+    - Constructs a Game, steps through n_rounds, applies trades to portfolios each round
+    - Computes time-averaged mark-to-market wealth as each agent's fitness score
+    - Raises GameExecutionError (wrapping the original exception) on any mid-run failure
+    - Returns (final_score, game) where final_score is a list of (agent_id, mean_wealth)
+    """
     # Create one Game instance for this generation.
     current_game = Game(
         population_spec=population_spec,

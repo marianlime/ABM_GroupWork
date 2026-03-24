@@ -1,3 +1,8 @@
+"""
+Core Game class that manages agent initialisation, per-round order collection,
+market clearing, and portfolio accounting for one generation of the simulation.
+"""
+
 from collections import Counter, defaultdict
 from .noise_signal import assign_info_param_set
 from .trader import Trader
@@ -6,25 +11,18 @@ import hashlib
 import numpy as np
 
 
-def _noise_seed_from_generation_id(experiment_id: str, generation_id: int) -> int:
-    """Derive a stable integer seed from the experiment/generation identity so noise parameter
-    assignment is reproducible for a given generation."""
-    return int(hashlib.sha256(f"noise_{experiment_id}_{generation_id}".encode()).hexdigest()[:16], 16)
+def _stable_seed(namespace: str, experiment_id: str, generation_id: int) -> int:
+    """Derive a stable, reproducible integer seed namespaced by purpose.
 
-
-def _zi_seed_from_generation_id(experiment_id: str, generation_id: int) -> int:
-    """Derive a separate stable seed for the ZI-agent RNG, distinct from the
-    noise-parameter seed so the two random streams are independent."""
-    return int(hashlib.sha256(f"zi_{experiment_id}_{generation_id}".encode()).hexdigest()[:16], 16)
-
-
-def _signal_seed_from_generation_id(experiment_id: str, generation_id: int) -> int:
-    """Derive a stable seed for the informed-agent signal RNG, independent of
-    the noise-parameter and ZI seeds so all three streams are isolated."""
-    return int(hashlib.sha256(f"signal_{experiment_id}_{generation_id}".encode()).hexdigest()[:16], 16)
+    Each distinct namespace (e.g. 'noise', 'zi', 'signal') produces an
+    independent RNG stream so the three random processes don't interfere.
+    """
+    return int(hashlib.sha256(f"{namespace}_{experiment_id}_{generation_id}".encode()).hexdigest()[:16], 16)
 
 
 class Game:
+    """Encapsulates one generation of the market: agents, fundamentals, round state, and history."""
+
     def __init__(
         self,
         population_spec: list[dict],
@@ -80,7 +78,7 @@ class Game:
         self.price_history = {}
 
         n_informed = sum(1 for a in self.population_spec if a["trader_type"] != "zi")
-        noise_seed = _noise_seed_from_generation_id(self.experiment_id, self.generation_id)
+        noise_seed = _stable_seed("noise", self.experiment_id, self.generation_id)
         self.info_param_set = assign_info_param_set(
             n_agents=n_informed,
             info_param_distribution_type=self.info_param_distribution_type,
@@ -138,13 +136,13 @@ class Game:
         # generation ULID so results are repeatable, and isolated from the noise-parameter
         # RNG so the two streams don't interfere with each other.
         self._zi_rng = np.random.default_rng(
-            _zi_seed_from_generation_id(self.experiment_id, self.generation_id)
+            _stable_seed("zi", self.experiment_id, self.generation_id)
         )
 
         # Dedicated, reproducible RNG for informed-agent signal generation —
         # isolated from both the ZI and noise-parameter streams.
         self._signal_rng = np.random.default_rng(
-            _signal_seed_from_generation_id(self.experiment_id, self.generation_id)
+            _stable_seed("signal", self.experiment_id, self.generation_id)
         )
 
         # Initial per-agent endowment — used to cap ZI order sizes so that agents
@@ -262,6 +260,13 @@ class Game:
         return orders
 
     def gather_orders_and_clear(self, current_round):
+        """
+        Collect orders from all agents, clear the market, and record round outcomes.
+
+        - Generates vectorised signals for informed agents and ZI orders in one batch
+        - Appends entries to market_round_records and agent_round_records
+        - Returns (best_price, total_volume, trades)
+        """
 
         agent_round_records = {}
 
@@ -470,6 +475,7 @@ class Game:
         return best_price, total_volume, trades
 
     def update_portfolio(self, trade):
+        """Apply a filled trade to the relevant agent's cash and share holdings."""
         agent = self.agents[trade["agent_id"]]
 
         qty = float(trade["quantity"])
@@ -491,4 +497,5 @@ class Game:
             raise ValueError("Unknown trade action")
 
     def liquidate_assets(self, agent_id):
+        """Return the terminal wealth of an agent by valuing shares at the final fundamental price."""
         return float(self.fundamental_path[-1]) * float(self.agents[agent_id].shares) + float(self.agents[agent_id].cash)

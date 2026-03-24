@@ -26,6 +26,7 @@ from pathlib import Path
 # analysis.py (imported via main) forces matplotlib.use("Agg") at module level.
 # Import project code first, then switch to an interactive backend.
 import pandas as pd
+from constants import COMPARISON_PARAM_SPECS, WEALTH_INFORMED_COL, WEALTH_ZI_COL
 from main import run_experiment, DEFAULT_EXPERIMENT_CONFIG  # triggers analysis.py
 
 import matplotlib.pyplot as plt
@@ -42,20 +43,19 @@ ACTIVE_SWEEPS = [
 ]
 
 TOTAL_AGENTS  = 100
-N_GENERATIONS = 200
-N_ROUNDS      = 20
-SMOOTH_WINDOW = 10   # rolling-mean window in generations
+N_GENERATIONS = 100
+N_ROUNDS      = 100
+SMOOTH_WINDOW = 20   # rolling-mean window in generations
 
 # Population sweep – (n_parameterised_agents, n_zi_agents) summing to TOTAL_AGENTS
 POPULATION_SWEEP = [
-    (10,  90),
-    (25,  75),
+    (20,  80),
     (50,  50),
-    (75,  25),
+    (80,  20),
 ]
 
 # GBM drift sweep – volatility held at FIXED_VOLATILITY
-DRIFT_SWEEP      = [0.00, 0.02, 0.05, 0.10]
+DRIFT_SWEEP      = [0.00, 0.05, 0.10]
 FIXED_VOLATILITY = 0.20
 
 # GBM volatility sweep – drift held at FIXED_DRIFT
@@ -68,22 +68,10 @@ DEFAULT_N_ZI       = TOTAL_AGENTS - DEFAULT_N_INFORMED
 
 COMPARISON_OUTPUT_DIR = Path("comparison_outputs")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# WHAT TO PLOT
-# ─────────────────────────────────────────────────────────────────────────────
-
-PARAMS = [
-    ("mean_qty_aggression",                    "Mean Qty Aggression"),
-    ("mean_signal_aggression",                 "Mean Signal Aggression"),
-    ("mean_threshold",                         "Mean Threshold"),
-    ("mean_signal_clip",                       "Mean Signal Clip"),
-    ("mean_info_param_parameterised_informed", "Mean Info Param (informed)"),
-]
-
-WEALTH_SERIES = [
-    ("mean_wealth_parameterised_informed", "Informed agent wealth"),
-    ("mean_wealth_zi",                     "ZI agent wealth"),
-]
+# COMPARISON_PARAM_SPECS, WEALTH_INFORMED_COL, WEALTH_ZI_COL imported from constants.py
+# SMOOTH_WINDOW is set independently from analysis.py's _ROLL (10) — comparison plots
+# use a wider window because runs are longer and we want smoother trend lines.
+PARAMS = COMPARISON_PARAM_SPECS
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -163,9 +151,27 @@ def _build_params_figure(title: str, runs: list[tuple[str, pd.DataFrame]]) -> pl
 
 
 def _build_wealth_figure(title: str, runs: list[tuple[str, pd.DataFrame]]) -> plt.Figure:
-    fig, axes = plt.subplots(1, len(WEALTH_SERIES), figsize=(4 * len(WEALTH_SERIES), 5), sharey=False)
+    fig, ax = plt.subplots(1, 1, figsize=(6, 5))
     fig.suptitle(title, fontsize=13, fontweight="bold", y=1.01)
-    _plot_series(axes, runs, WEALTH_SERIES, "Mean wealth")
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+
+    for run_idx, (run_label, df) in enumerate(runs):
+        color = colors[run_idx % len(colors)]
+        if WEALTH_INFORMED_COL not in df.columns or WEALTH_ZI_COL not in df.columns:
+            continue
+        diff   = df[WEALTH_INFORMED_COL].astype(float) - df[WEALTH_ZI_COL].astype(float)
+        smooth = _smooth(diff)
+        gens   = df["generation"].values
+        ax.plot(gens, diff,   color=color, alpha=0.15, linewidth=0.8)
+        ax.plot(gens, smooth, color=color, linewidth=2.0, label=run_label)
+
+    ax.axhline(0, color="white", linewidth=0.8, linestyle="--", alpha=0.4)
+    ax.set_title("Informed wealth − ZI wealth", fontsize=10)
+    ax.set_xlabel("Generation")
+    ax.set_ylabel("Wealth difference")
+    ax.set_xlim(left=0)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc="best")
     fig.tight_layout()
     return fig
 

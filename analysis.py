@@ -1,3 +1,8 @@
+"""
+Post-run analysis and plotting for the ABM: per-generation metric helpers,
+cross-sectional wealth/parameter diagnostics, and evolutionary trend charts.
+"""
+
 from pathlib import Path
 import re
 
@@ -8,15 +13,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from numba import njit
 
+from constants import PARAM_BOUNDS
 
-# Canonical order and bounds for the four learnable parameters.
-# Keep in sync with PARAM_BOUNDS in main.py.
-PARAM_BOUNDS = {
-    "qty_aggression":    (0.0, 1.0, 0.02),
-    "signal_aggression": (0.0, 1.0, 0.02),
-    "threshold":         (0.0, 1.0, 0.02),
-    "signal_clip":       (0.0, 1.0, 0.02),
-}
 PARAM_NAMES = list(PARAM_BOUNDS.keys())
 
 _ROLL = 10   # smoothing window (generations) used throughout
@@ -70,8 +68,9 @@ def compute_strategy_mean_info_param(agents) -> dict:
 def compute_strategy_param_stats(agents) -> dict:
     """
     Mean and std of each learnable parameter across all parameterised_informed agents.
-    Returns:
-        {"qty_aggression": {"mean": float, "std": float}, ...}
+
+    - Iterates over PARAM_NAMES; returns NaN stats for any parameter with no values
+    - Returns {"qty_aggression": {"mean": float, "std": float}, ...}
     """
     informed_agents = [
         agent for agent in agents.values()
@@ -153,21 +152,13 @@ def analyse_game_results(
     """
     Post-run diagnostics for the ABM run.
 
-    Parameters
-    ----------
-    g                   : most-recent Game instance (for round-level plots)
-    final_score         : list of (agent_id, wealth) for most-recent game
-    title_prefix        : string prepended to all plot titles
-    generation_counts_df: DataFrame built by the main loop (one row per generation)
-    rolling_games       : list of the last N game instances
-    rolling_scores      : list of the last N final_score lists
-
-    Cross-sectional plots use N×n_agents observations from the rolling window.
-    Round-by-round plots are averaged across the N games.
-
-    Returns
-    -------
-    results_df : DataFrame with per-agent outcomes + strategy_params
+    - g: most-recent Game instance used for round-level plots
+    - final_score: list of (agent_id, wealth) for the most-recent game
+    - title_prefix: string prepended to all plot titles
+    - generation_counts_df: DataFrame built by the main loop, one row per generation
+    - rolling_games / rolling_scores: last N game instances and their scores; cross-sectional
+      plots use N×n_agents observations and round-by-round plots are averaged across N games
+    - Returns a DataFrame with per-agent outcomes and strategy_params
     """
     # ── Fundamentals for round-level plots ───────────────────────────────────
     fundamental = np.array(g.fundamental_path, dtype=float)

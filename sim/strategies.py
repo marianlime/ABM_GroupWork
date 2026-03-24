@@ -6,7 +6,7 @@ import numpy as np
 # ----------------------------
 
 def zero_intelligence(signal: float, cash: float, shares: float, value: float,
-                      gbm_volatility: float = 0.2) -> dict:
+                      gbm_volatility: float = 0.2, **kwargs) -> dict:
     """
     Reference implementation only — not called during simulation.
     ZI orders are generated in bulk by Game._batch_zi_orders for performance.
@@ -56,21 +56,28 @@ def parameterised_informed(
     threshold: float = 0.0,
     signal_clip: float = 0.50,  # evolved parameter
     min_qty_fraction: float = 0.01,
+    info_param: float = 0.0,
 ) -> dict:
     """
     Single parameterised strategy for all informed agents.
-    Evolution operates on the three continuous parameters.
+    Evolution operates on the four continuous parameters.
 
     qty_aggression     ∈ [0,1]   : scales order size per unit of conviction
     signal_aggression  ∈ [0,1]   : 0 = post at current value, 1 = post at full signal price
-    threshold          ∈ [0,1]   : no-trade band — hold when |signal − 1| < threshold
-    signal_clip        ∈ [0,1]   : clamps signal to [1 − clip, 1 + clip] before acting;
-                                   must exceed threshold for the agent to ever trade
+    threshold          ∈ [0,1]   : no-trade selectivity; scaled by info_param so that
+                                   precise agents (info_param→0) always trade and noisy
+                                   agents (info_param→1) require a larger edge to act
+    signal_clip        ∈ [0,1]   : clamps signal to [1 − clip, 1 + clip] before acting
+    info_param                   : agent's signal noise std (passed from Trader, not evolved
+                                   via strategy_params — used only to scale the threshold)
+
+    effective_threshold = threshold * info_param
     """
     signal = float(np.clip(signal, 1.0 - signal_clip, 1.0 + signal_clip))
     edge = signal - 1.0
 
-    if abs(edge) < threshold:
+    effective_threshold = threshold * float(info_param)
+    if abs(edge) < effective_threshold:
         return {"Price": 0.0, "Quantity": 0.0, "Buy": 0.0, "Sell": 0.0, "Hold": 1.0}
 
     if abs(edge) < 1e-8:
@@ -87,7 +94,7 @@ def parameterised_informed(
     price = max(round(value * patient_level, 2), 0.01)
 
     conviction = abs(edge)
-    fraction = min(conviction * qty_aggression * 10.0, 1.0)
+    fraction = qty_aggression * min(conviction / max(signal_clip, 1e-8), 1.0)
 
     if action == "buy":
         max_qty = cash / price if price > 0 else 0.0

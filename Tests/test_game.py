@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from sim.game import Game, _noise_seed_from_generation_id, _zi_seed_from_generation_id
+from sim.game import Game, _stable_seed
 
 
 def _make_game(pop=None, n_rounds=5):
@@ -34,13 +34,13 @@ def _make_game(pop=None, n_rounds=5):
 class TestSeedHelpers:
 
     def test_noise_seed_stable(self):
-        assert _noise_seed_from_generation_id("EXP", 1) == _noise_seed_from_generation_id("EXP", 1)
+        assert _stable_seed("noise", "EXP", 1) == _stable_seed("noise", "EXP", 1)
 
     def test_zi_seed_stable(self):
-        assert _zi_seed_from_generation_id("EXP", 1) == _zi_seed_from_generation_id("EXP", 1)
+        assert _stable_seed("zi", "EXP", 1) == _stable_seed("zi", "EXP", 1)
 
     def test_noise_and_zi_seeds_differ(self):
-        assert _noise_seed_from_generation_id("EXP", 1) != _zi_seed_from_generation_id("EXP", 1)
+        assert _stable_seed("noise", "EXP", 1) != _stable_seed("zi", "EXP", 1)
 
 
 # Game construction

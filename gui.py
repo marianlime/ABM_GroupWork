@@ -1,3 +1,8 @@
+"""
+PySide6 GUI for the agent-based market simulation: experiment configuration,
+live generation monitoring, database browsing, and multi-experiment comparison.
+"""
+
 import sys
 from pathlib import Path
 
@@ -30,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from constants import COMPARISON_PARAM_SPECS, WEALTH_INFORMED_COL, WEALTH_ZI_COL
 from database_creation import create_database
 from main import DEFAULT_EXPERIMENT_CONFIG, run_experiment
 
@@ -42,19 +48,6 @@ STRATEGY_COLORS = {
     "zi": (255, 140, 0),
     "parameterised_informed": (30, 144, 255),
 }
-AGENT_PERFORMANCE_COLORS = {
-    "zi": (255, 140, 0),
-    "parameterised_informed": (30, 144, 255),
-}
-COMPARISON_PARAM_SPECS = [
-    ("mean_qty_aggression", "Mean Qty Aggression"),
-    ("mean_signal_aggression", "Mean Signal Aggression"),
-    ("mean_threshold", "Mean Threshold"),
-    ("mean_signal_clip", "Mean Signal Clip"),
-    ("mean_info_param_parameterised_informed", "Mean Info Param (informed)"),
-]
-WEALTH_INFORMED_COL = "mean_wealth_parameterised_informed"
-WEALTH_ZI_COL = "mean_wealth_zi"
 COMPARISON_WEALTH_DIFF_SPEC = (
     "wealth_difference",
     "Informed Wealth - ZI Wealth",
@@ -99,6 +92,8 @@ def _set_plot_bottom_label(plot, x_label: str, legend_items=None):
 
 
 class DatabaseLoaderWorker(QThread):
+    """Background thread that loads experiment and generation data from a DuckDB file."""
+
     loaded = Signal(dict)
     error = Signal(str)
 
@@ -769,6 +764,8 @@ class DatabaseLoaderWorker(QThread):
 
 
 class ExperimentRunnerWorker(QThread):
+    """Background thread that executes a full experiment run and emits progress events to the GUI."""
+
     progress = Signal(dict)
     completed = Signal(dict)
     error = Signal(str)
@@ -790,6 +787,8 @@ class ExperimentRunnerWorker(QThread):
 
 
 class ComparisonLoaderWorker(QThread):
+    """Background thread that fetches generation-level metrics for multiple experiments to populate comparison charts."""
+
     loaded = Signal(dict)
     error = Signal(str)
 
@@ -959,6 +958,8 @@ class ComparisonLoaderWorker(QThread):
 
 
 class CommandCenter(QMainWindow):
+    """Main application window hosting the experiment runner, live charts, database browser, and comparison tabs."""
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Agent-Based Market Simulation")
@@ -2510,7 +2511,7 @@ class CommandCenter(QMainWindow):
             strategy_type = str(agent_df["strategy_type"].iloc[0])
             if not self._is_strategy_visible(strategy_type):
                 continue
-            color = AGENT_PERFORMANCE_COLORS.get(strategy_type, (120, 120, 120))
+            color = STRATEGY_COLORS.get(strategy_type, (120, 120, 120))
             plot.plot(
                 x=agent_df["round_number"].tolist(),
                 y=self._smooth_series(agent_df[metric_key].tolist()),
@@ -2546,7 +2547,7 @@ class CommandCenter(QMainWindow):
         if filtered_df.empty:
             return
 
-        color = AGENT_PERFORMANCE_COLORS["parameterised_informed"]
+        color = STRATEGY_COLORS["parameterised_informed"]
         for _, agent_df in filtered_df.groupby("agent_id"):
             plot.plot(
                 x=agent_df["generation_id"].tolist(),
