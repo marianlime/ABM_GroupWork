@@ -4,6 +4,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 import pyqtgraph as pg
+from PySide6.QtGui import QColor
 from PySide6.QtCore import QThread, Qt, Signal, QTimer
 from PySide6.QtWidgets import (
     QApplication,
@@ -14,6 +15,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -43,6 +46,29 @@ AGENT_PERFORMANCE_COLORS = {
     "zi": (255, 140, 0),
     "parameterised_informed": (30, 144, 255),
 }
+COMPARISON_PARAM_SPECS = [
+    ("mean_qty_aggression", "Mean Qty Aggression"),
+    ("mean_signal_aggression", "Mean Signal Aggression"),
+    ("mean_threshold", "Mean Threshold"),
+    ("mean_signal_clip", "Mean Signal Clip"),
+    ("mean_info_param_parameterised_informed", "Mean Info Param (informed)"),
+]
+WEALTH_INFORMED_COL = "mean_wealth_parameterised_informed"
+WEALTH_ZI_COL = "mean_wealth_zi"
+COMPARISON_WEALTH_DIFF_SPEC = (
+    "wealth_difference",
+    "Informed Wealth - ZI Wealth",
+)
+COMPARISON_LINE_COLORS = [
+    (255, 140, 0),
+    (30, 144, 255),
+    (220, 20, 60),
+    (46, 139, 87),
+    (218, 165, 32),
+    (186, 85, 211),
+    (0, 206, 209),
+    (205, 92, 92),
+]
 
 
 def _humanize_sql_object_name(name: str) -> str:
@@ -763,6 +789,175 @@ class ExperimentRunnerWorker(QThread):
             self.error.emit(str(exc))
 
 
+class ComparisonLoaderWorker(QThread):
+    loaded = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, db_path, experiment_ids):
+        super().__init__()
+        self.db_path = db_path
+        self.experiment_ids = [str(experiment_id) for experiment_id in experiment_ids]
+
+    def run(self):
+        try:
+            self.loaded.emit(self._load_payload())
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+    def _load_payload(self):
+        db_file = Path(self.db_path)
+        if not db_file.exists():
+            raise FileNotFoundError(f"Database file not found: {db_file}")
+        if not self.experiment_ids:
+            return {"experiments": pd.DataFrame(), "comparison_metrics": pd.DataFrame()}
+
+        create_database(str(db_file))
+        con = duckdb.connect(str(db_file))
+        try:
+            experiment_ids_sql = ", ".join(f"'{experiment_id}'" for experiment_id in self.experiment_ids)
+
+            experiments_df = con.execute(
+                f"""
+                SELECT
+                    experiment_id,
+                    experiment_name,
+                    experiment_type,
+                    creation_time,
+                    n_generations,
+                    n_rounds,
+                    n_agents
+                FROM experiments
+                WHERE experiment_id IN ({experiment_ids_sql})
+                ORDER BY creation_time DESC
+                """
+            ).fetchdf()
+
+            if experiments_df.empty:
+                return {"experiments": experiments_df, "comparison_metrics": pd.DataFrame()}
+
+            generations_df = con.execute(
+                f"""
+                SELECT
+                    experiment_id,
+                    generation_id,
+                    mean_qty_aggression,
+                    mean_signal_aggression,
+                    mean_threshold,
+                    mean_signal_clip
+                FROM generations
+                WHERE experiment_id IN ({experiment_ids_sql})
+                ORDER BY experiment_id, generation_id
+                """
+            ).fetchdf()
+
+            wealth_history_df = con.execute(
+                f"""
+                WITH final_round AS (
+                    SELECT
+                        experiment_id,
+                        generation_id,
+                        MAX(round_number) AS final_round_number
+                    FROM agent_round
+                    WHERE experiment_id IN ({experiment_ids_sql})
+                    GROUP BY experiment_id, generation_id
+                )
+                SELECT
+                    ar.experiment_id,
+                    ar.generation_id,
+                    ap.strategy_type,
+                    AVG(ar.cash_end + ar.inventory_end * COALESCE(mr.p_t, fs.price, 0)) AS mean_wealth
+                FROM final_round fr
+                JOIN agent_round ar
+                  ON fr.experiment_id = ar.experiment_id
+                 AND fr.generation_id = ar.generation_id
+                 AND fr.final_round_number = ar.round_number
+                JOIN agent_population ap
+                  ON ar.experiment_id = ap.experiment_id
+                 AND ar.generation_id = ap.generation_id
+                 AND ar.agent_id = ap.agent_id
+                LEFT JOIN market_round mr
+                  ON ar.experiment_id = mr.experiment_id
+                 AND ar.generation_id = mr.generation_id
+                 AND ar.round_number = mr.round_number
+                LEFT JOIN fundamental_series fs
+                  ON ar.experiment_id = fs.experiment_id
+                 AND ar.generation_id = fs.generation_id
+                 AND ar.round_number = fs.round_number
+                GROUP BY ar.experiment_id, ar.generation_id, ap.strategy_type
+                ORDER BY ar.experiment_id, ar.generation_id, ap.strategy_type
+                """
+            ).fetchdf()
+
+            mean_info_param_df = con.execute(
+                f"""
+                SELECT
+                    experiment_id,
+                    generation_id,
+                    strategy_type,
+                    AVG(info_param) AS mean_info_param
+                FROM agent_population
+                WHERE experiment_id IN ({experiment_ids_sql})
+                GROUP BY experiment_id, generation_id, strategy_type
+                ORDER BY experiment_id, generation_id, strategy_type
+                """
+            ).fetchdf()
+
+            comparison_df = generations_df.copy()
+            if not wealth_history_df.empty:
+                wealth_pivot = (
+                    wealth_history_df.pivot(
+                        index=["experiment_id", "generation_id"],
+                        columns="strategy_type",
+                        values="mean_wealth",
+                    )
+                    .reset_index()
+                    .rename(
+                        columns={
+                            "parameterised_informed": "mean_wealth_parameterised_informed",
+                            "zi": "mean_wealth_zi",
+                        }
+                    )
+                )
+                comparison_df = comparison_df.merge(
+                    wealth_pivot,
+                    on=["experiment_id", "generation_id"],
+                    how="left",
+                )
+
+            if not mean_info_param_df.empty:
+                info_pivot = (
+                    mean_info_param_df.pivot(
+                        index=["experiment_id", "generation_id"],
+                        columns="strategy_type",
+                        values="mean_info_param",
+                    )
+                    .reset_index()
+                    .rename(
+                        columns={
+                            "parameterised_informed": "mean_info_param_parameterised_informed",
+                            "zi": "mean_info_param_zi",
+                        }
+                    )
+                )
+                comparison_df = comparison_df.merge(
+                    info_pivot,
+                    on=["experiment_id", "generation_id"],
+                    how="left",
+                )
+
+            if not comparison_df.empty:
+                comparison_df = comparison_df.sort_values(
+                    ["experiment_id", "generation_id"]
+                ).reset_index(drop=True)
+
+            return {
+                "experiments": experiments_df,
+                "comparison_metrics": comparison_df,
+            }
+        finally:
+            con.close()
+
+
 class CommandCenter(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -774,11 +969,14 @@ class CommandCenter(QMainWindow):
         self._suppress_selection_signals = False
         self.worker = None
         self.run_worker = None
+        self.compare_worker = None
         self.live_generations_df = pd.DataFrame()
         self.live_strategy_generation_df = pd.DataFrame()
         self.live_strategy_round_df = pd.DataFrame()
         self._pending_generation_id = None
         self._last_payload = None
+        self._comparison_payload = None
+        self._comparison_selected_ids = []
         self.smoothing_window = 1
         self._pending_smoothing_window = 1
         self._generation_slider_timer = QTimer(self)
@@ -821,12 +1019,15 @@ class CommandCenter(QMainWindow):
         self._build_strategy_performance_tab()
         self.agent_performance_tab = QWidget()
         self._build_agent_performance_tab()
+        self.comparison_tab = QWidget()
+        self._build_comparison_tab()
         self.sql_tab = QTabWidget()
         self._build_sql_tab()
 
         self.tabs.addTab(self.dashboard_tab, "Dashboard")
         self.tabs.addTab(self.strategy_performance_tab, "Strategy Performance")
         self.tabs.addTab(self.agent_performance_tab, "Agent Performance")
+        self.tabs.addTab(self.comparison_tab, "Run Comparison")
         self.tabs.addTab(self.sql_tab, "SQL Data")
 
         self.combo_experiment.currentIndexChanged.connect(self._on_experiment_changed)
@@ -945,6 +1146,31 @@ class CommandCenter(QMainWindow):
         self.run_status_label = QLabel("No run started.")
         self.run_status_label.setWordWrap(True)
         left_layout.addWidget(self.run_status_label)
+
+        comparison_group = QGroupBox("Compare Multiple Runs")
+        comparison_layout = QVBoxLayout()
+        comparison_help = QLabel(
+            "Select two or more experiments to overlay their generation-level parameter and wealth trends."
+        )
+        comparison_help.setWordWrap(True)
+        self.comparison_experiment_list = QListWidget()
+        self.comparison_experiment_list.setSelectionMode(QListWidget.MultiSelection)
+        self.btn_compare_runs = QPushButton("Compare Selected Runs")
+        self.btn_compare_runs.setStyleSheet(
+            "background-color: #6a5acd; color: white; font-weight: bold; padding: 10px;"
+        )
+        self.btn_compare_runs.clicked.connect(self.load_comparison_data)
+        self.btn_clear_comparison = QPushButton("Clear Comparison")
+        self.btn_clear_comparison.clicked.connect(self.clear_comparison)
+        self.comparison_status_label = QLabel("Select experiments and click Compare Selected Runs.")
+        self.comparison_status_label.setWordWrap(True)
+        comparison_layout.addWidget(comparison_help)
+        comparison_layout.addWidget(self.comparison_experiment_list)
+        comparison_layout.addWidget(self.btn_compare_runs)
+        comparison_layout.addWidget(self.btn_clear_comparison)
+        comparison_layout.addWidget(self.comparison_status_label)
+        comparison_group.setLayout(comparison_layout)
+        left_layout.addWidget(comparison_group)
         left_layout.addStretch()
 
     def _build_dashboard_tab(self):
@@ -1115,6 +1341,72 @@ class CommandCenter(QMainWindow):
         self.table_market = None
         self.table_agent_round = None
         self.table_strategy = None
+
+    def _build_comparison_tab(self):
+        layout = QVBoxLayout(self.comparison_tab)
+        comparison_scroll = QScrollArea()
+        comparison_scroll.setWidgetResizable(True)
+        comparison_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        layout.addWidget(comparison_scroll)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+
+        summary_group = QGroupBox("Selected Run Summary")
+        summary_layout = QVBoxLayout(summary_group)
+        self.comparison_summary_label = QLabel(
+            "No comparison loaded. Select experiments from the left panel."
+        )
+        self.comparison_summary_label.setWordWrap(True)
+        summary_layout.addWidget(self.comparison_summary_label)
+        content_layout.addWidget(summary_group)
+
+        parameter_group = QGroupBox("Parameter Comparison Across Generations")
+        parameter_layout = QVBoxLayout(parameter_group)
+        self.comparison_param_area = pg.GraphicsLayoutWidget()
+        self.comparison_param_area.setMinimumHeight(1300)
+        parameter_layout.addWidget(self.comparison_param_area)
+        content_layout.addWidget(parameter_group)
+
+        wealth_group = QGroupBox("Wealth Difference Across Generations")
+        wealth_layout = QVBoxLayout(wealth_group)
+        self.comparison_wealth_area = pg.GraphicsLayoutWidget()
+        self.comparison_wealth_area.setMinimumHeight(450)
+        wealth_layout.addWidget(self.comparison_wealth_area)
+        content_layout.addWidget(wealth_group)
+
+        comparison_scroll.setWidget(content)
+
+        self.comparison_param_plots = {}
+        self.comparison_wealth_plots = {}
+        self.comparison_param_curves = {}
+        self.comparison_plot_titles = {}
+
+        for idx, (metric_key, title) in enumerate(COMPARISON_PARAM_SPECS):
+            plot = self.comparison_param_area.addPlot(title=self._format_plot_title(title))
+            _style_plot(plot)
+            plot.setLabel("left", "Value")
+            plot.setLabel("bottom", "Generation")
+            plot.addLegend(offset=(10, 10))
+            self.comparison_param_plots[metric_key] = plot
+            self.comparison_param_curves[metric_key] = {}
+            self.comparison_plot_titles[metric_key] = title
+            if idx % 2 == 1:
+                self.comparison_param_area.nextRow()
+        self.comparison_param_area.ci.layout.setColumnStretchFactor(0, 1)
+        self.comparison_param_area.ci.layout.setColumnStretchFactor(1, 1)
+
+        wealth_metric_key, wealth_title = COMPARISON_WEALTH_DIFF_SPEC
+        wealth_plot = self.comparison_wealth_area.addPlot(title=self._format_plot_title(wealth_title))
+        _style_plot(wealth_plot)
+        wealth_plot.setLabel("left", "Wealth Difference")
+        wealth_plot.setLabel("bottom", "Generation")
+        wealth_plot.addLegend(offset=(10, 10))
+        wealth_plot.addLine(y=0, pen=pg.mkPen((255, 255, 255, 100), width=1, style=Qt.DashLine))
+        self.comparison_wealth_plots[wealth_metric_key] = wealth_plot
+        self.comparison_plot_titles[wealth_metric_key] = wealth_title
+        self.comparison_wealth_area.ci.layout.setColumnStretchFactor(0, 1)
+        self.comparison_wealth_area.ci.layout.setColumnStretchFactor(1, 1)
 
     def _build_strategy_performance_tab(self):
         layout = QVBoxLayout(self.strategy_performance_tab)
@@ -1359,6 +1651,65 @@ class CommandCenter(QMainWindow):
         self.worker.error.connect(self._show_error)
         self.worker.finished.connect(self._worker_finished)
         self.worker.start()
+
+    def load_comparison_data(self):
+        if self.compare_worker is not None:
+            QMessageBox.information(self, "Comparison In Progress", "A comparison load is already in progress.")
+            return
+
+        selected_ids = [
+            item.data(Qt.UserRole)
+            for item in self.comparison_experiment_list.selectedItems()
+            if item.data(Qt.UserRole) is not None
+        ]
+        if len(selected_ids) < 2:
+            QMessageBox.information(
+                self,
+                "Select More Runs",
+                "Please select at least two experiments to compare.",
+            )
+            return
+
+        db_path = self.input_db_path.text().strip()
+        if not db_path:
+            QMessageBox.warning(self, "Missing Database", "Please provide a DuckDB file path.")
+            return
+
+        self._comparison_selected_ids = [str(experiment_id) for experiment_id in selected_ids]
+        self.btn_compare_runs.setEnabled(False)
+        self.comparison_status_label.setText("Loading comparison data...")
+        self.compare_worker = ComparisonLoaderWorker(db_path=db_path, experiment_ids=selected_ids)
+        self.compare_worker.loaded.connect(self._apply_comparison_payload)
+        self.compare_worker.error.connect(self._show_comparison_error)
+        self.compare_worker.finished.connect(self._comparison_worker_finished)
+        self.compare_worker.start()
+
+    def clear_comparison(self):
+        self._comparison_payload = None
+        self._comparison_selected_ids = []
+        self.comparison_experiment_list.clearSelection()
+        self.comparison_summary_label.setText(
+            "No comparison loaded. Select experiments from the left panel."
+        )
+        self.comparison_status_label.setText("Comparison cleared.")
+        self._clear_comparison_plots()
+
+    def _comparison_worker_finished(self):
+        self.btn_compare_runs.setEnabled(True)
+        self.compare_worker = None
+
+    def _show_comparison_error(self, message):
+        self.comparison_status_label.setText("Comparison load failed.")
+        QMessageBox.critical(self, "Comparison Error", message)
+
+    def _apply_comparison_payload(self, payload):
+        self._comparison_payload = payload
+        experiments_df = payload.get("experiments", pd.DataFrame())
+        comparison_df = payload.get("comparison_metrics", pd.DataFrame())
+        self._update_comparison_summary(experiments_df, comparison_df)
+        self._update_comparison_plots(comparison_df, experiments_df)
+        self.tabs.setCurrentWidget(self.comparison_tab)
+        self.comparison_status_label.setText("Comparison loaded.")
 
     def start_new_run(self):
         if self.run_worker is not None:
@@ -1648,6 +1999,18 @@ class CommandCenter(QMainWindow):
             if index >= 0:
                 self.combo_experiment.setCurrentIndex(index)
         self._suppress_selection_signals = False
+        self._populate_comparison_experiment_list(experiments_df)
+
+    def _populate_comparison_experiment_list(self, experiments_df):
+        selected_ids = set(self._comparison_selected_ids)
+        self.comparison_experiment_list.clear()
+        for _, row in experiments_df.iterrows():
+            label = f"{row['experiment_name']} | {row['experiment_id']}"
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, str(row["experiment_id"]))
+            self.comparison_experiment_list.addItem(item)
+            if str(row["experiment_id"]) in selected_ids:
+                item.setSelected(True)
 
     def _populate_sql_tab(self, sql_objects):
         while self.sql_tab.count() > 0:
@@ -1811,6 +2174,10 @@ class CommandCenter(QMainWindow):
         )
         for plot, base_title in self.agent_round_plots.values():
             plot.setTitle(self._format_plot_title(base_title))
+        for metric_key, plot in self.comparison_param_plots.items():
+            plot.setTitle(self._format_plot_title(self.comparison_plot_titles[metric_key]))
+        for metric_key, plot in self.comparison_wealth_plots.items():
+            plot.setTitle(self._format_plot_title(self.comparison_plot_titles[metric_key]))
 
     def _smooth_series(self, values):
         if self.smoothing_window <= 1:
@@ -1827,6 +2194,12 @@ class CommandCenter(QMainWindow):
 
     def _refresh_plots_only(self):
         if self._last_payload is None:
+            if self._comparison_payload is not None:
+                self._update_all_plot_titles()
+                self._update_comparison_plots(
+                    self._comparison_payload.get("comparison_metrics", pd.DataFrame()),
+                    self._comparison_payload.get("experiments", pd.DataFrame()),
+                )
             return
         self._update_all_plot_titles()
         self._update_parameter_plot(self._last_payload["generations"])
@@ -1891,6 +2264,11 @@ class CommandCenter(QMainWindow):
             self._last_payload["agent_execution_price_deviation"],
             "execution_price_deviation",
         )
+        if self._comparison_payload is not None:
+            self._update_comparison_plots(
+                self._comparison_payload.get("comparison_metrics", pd.DataFrame()),
+                self._comparison_payload.get("experiments", pd.DataFrame()),
+            )
 
     def _update_summary(self, payload):
         experiments_df = payload["experiments"]
@@ -2201,6 +2579,110 @@ class CommandCenter(QMainWindow):
 
         table.resizeColumnsToContents()
         table.resizeRowsToContents()
+
+    def _clear_comparison_plots(self):
+        for metric_key, plot in self.comparison_param_plots.items():
+            plot.clear()
+            if plot.legend is not None and plot.legend.scene() is not None:
+                plot.legend.scene().removeItem(plot.legend)
+            plot.legend = None
+            plot.addLegend(offset=(10, 10))
+            plot.setTitle(self._format_plot_title(self.comparison_plot_titles[metric_key]))
+        for metric_key, plot in self.comparison_wealth_plots.items():
+            plot.clear()
+            if plot.legend is not None and plot.legend.scene() is not None:
+                plot.legend.scene().removeItem(plot.legend)
+            plot.legend = None
+            plot.addLegend(offset=(10, 10))
+            plot.addLine(y=0, pen=pg.mkPen((255, 255, 255, 100), width=1, style=Qt.DashLine))
+            plot.setTitle(self._format_plot_title(self.comparison_plot_titles[metric_key]))
+
+    def _update_comparison_summary(self, experiments_df, comparison_df):
+        if experiments_df.empty:
+            self.comparison_summary_label.setText("No comparison data available.")
+            return
+
+        run_count = len(experiments_df)
+        labels = [
+            f"{row['experiment_name']} ({row['experiment_id']})"
+            for _, row in experiments_df.iterrows()
+        ]
+        if comparison_df.empty:
+            generation_summary = "No generation metrics found for the selected runs."
+        else:
+            generation_summary = (
+                f"Generations loaded: {int(comparison_df['generation_id'].min())}"
+                f" to {int(comparison_df['generation_id'].max())}"
+            )
+        self.comparison_summary_label.setText(
+            "\n".join(
+                [
+                    f"Comparing {run_count} runs",
+                    generation_summary,
+                    "Runs:",
+                    *labels,
+                ]
+            )
+        )
+
+    def _update_comparison_plots(self, comparison_df, experiments_df):
+        self._clear_comparison_plots()
+        if comparison_df.empty or experiments_df.empty:
+            return
+
+        labels_by_id = {
+            str(row["experiment_id"]): f"{row['experiment_name']} | {str(row['experiment_id'])[:8]}"
+            for _, row in experiments_df.iterrows()
+        }
+
+        for run_idx, (experiment_id, run_df) in enumerate(
+            comparison_df.groupby("experiment_id", sort=False)
+        ):
+            color = COMPARISON_LINE_COLORS[run_idx % len(COMPARISON_LINE_COLORS)]
+            transparent_color = QColor(*color)
+            transparent_color.setAlpha(70)
+            run_df = run_df.sort_values("generation_id")
+            x = run_df["generation_id"].tolist()
+            label = labels_by_id.get(str(experiment_id), str(experiment_id))
+
+            for metric_key, _ in COMPARISON_PARAM_SPECS:
+                if metric_key not in run_df.columns:
+                    continue
+                values = run_df[metric_key].astype(float).tolist()
+                self.comparison_param_plots[metric_key].plot(
+                    x=x,
+                    y=values,
+                    pen=pg.mkPen(transparent_color, width=1),
+                    name=None,
+                    connect="finite",
+                )
+                self.comparison_param_plots[metric_key].plot(
+                    x=x,
+                    y=self._smooth_series(values),
+                    pen=pg.mkPen(color, width=3),
+                    name=label,
+                    connect="finite",
+                )
+
+            if WEALTH_INFORMED_COL in run_df.columns and WEALTH_ZI_COL in run_df.columns:
+                diff_values = (
+                    run_df[WEALTH_INFORMED_COL].astype(float) - run_df[WEALTH_ZI_COL].astype(float)
+                ).tolist()
+                wealth_plot = self.comparison_wealth_plots[COMPARISON_WEALTH_DIFF_SPEC[0]]
+                wealth_plot.plot(
+                    x=x,
+                    y=diff_values,
+                    pen=pg.mkPen(transparent_color, width=1),
+                    name=None,
+                    connect="finite",
+                )
+                wealth_plot.plot(
+                    x=x,
+                    y=self._smooth_series(diff_values),
+                    pen=pg.mkPen(color, width=3),
+                    name=label,
+                    connect="finite",
+                )
 
 
 if __name__ == "__main__":
