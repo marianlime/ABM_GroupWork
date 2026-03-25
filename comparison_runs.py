@@ -98,35 +98,33 @@ STD_SUBPLOTS = [
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _run_single_worker(args: tuple) -> tuple:
-    """
-    Worker function executed in a subprocess.
-
-    Each run writes to its own temporary DuckDB file to avoid write conflicts;
-    the file is deleted once the DataFrame has been extracted.  Comparison runs
-    are therefore not persisted to the main experiment_results.duckdb.
-    """
     label, overrides = args
-    fd, tmp_db = tempfile.mkstemp(suffix=".duckdb", prefix="abm_comparison_")
-    os.close(fd)
-    os.unlink(tmp_db)  # remove the empty file so DuckDB can create a fresh DB at this path
-    try:
-        overrides = dict(overrides, db_path=tmp_db, experiment_name=label)
-        print(f"  [{label}] starting…", flush=True)
-        result = run_experiment(
-            config_overrides=overrides,
-            progress_callback=None,
-            run_analysis=False,
-        )
-        df = result["generation_counts_df"].reset_index(drop=True)
-        df["generation"] = df["generation"].astype(int)
-        print(f"  [{label}] done.", flush=True)
-        return (label, df)
-    finally:
-        try:
-            os.unlink(tmp_db)
-        except OSError:
-            pass
-
+    print(f"  [{label}] starting…", flush=True)
+    
+    # Pass disable_db_writes=True directly to your optimized function!
+    result = run_experiment(
+        config_overrides=overrides,
+        progress_callback=None,
+        run_analysis=False,
+        disable_db_writes=True 
+    )
+    
+    df = result["generation_counts_df"].reset_index(drop=True)
+    
+    needed_cols = {"generation", WEALTH_INFORMED_COL, WEALTH_ZI_COL}
+    for subplots in [PARAM_SUBPLOTS, STD_SUBPLOTS]:
+        for _, series_specs in subplots:
+            for col, _ in series_specs:
+                needed_cols.add(col)
+                
+    keep_cols = list(needed_cols.intersection(df.columns))
+    df = df[keep_cols].copy()
+    
+    df = df.astype(float) 
+    df["generation"] = df["generation"].astype(int)
+    
+    print(f"  [{label}] done.", flush=True)
+    return (label, df)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS

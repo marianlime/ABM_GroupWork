@@ -326,18 +326,18 @@ def _build_strategy_performance_generation_records(round_records, generation_id)
     return grouped.to_dict("records")
 
 
-def run_experiment(config_overrides=None, progress_callback=None, run_analysis=True):
+def run_experiment(config_overrides=None, progress_callback=None, run_analysis=True, disable_db_writes=False):
     """
-    Run a full evolutionary market experiment and persist results to DuckDB.
-
-    - Merges config_overrides with DEFAULT_EXPERIMENT_CONFIG
-    - Iterates over n_generations, running play_game and evolve_population each generation
-    - Calls progress_callback with structured event dicts when provided
-    - Writes all results asynchronously via AsyncDuckDBWriter
-    - Returns a dict with experiment_id, generation_counts_df, results_df, and config
+    Run a full evolutionary market experiment.
     """
     config = _merged_config(config_overrides)
-    create_database(config["db_path"])
+    
+    # OPTIMIZATION 1: Only setup the database if we actually want to write to it
+    if not disable_db_writes:
+        create_database(config["db_path"])
+        writer = AsyncDuckDBWriter(config["db_path"])
+    else:
+        writer = None
 
     strategy_counts = {
         "zi": int(config["n_zi_agents"]),
@@ -360,39 +360,22 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
     py_vers = _py_version()
     code_vers = _code_version()
 
-    writer = AsyncDuckDBWriter(config["db_path"])
     try:
         experiment_id = _generate_ulid()
         experiment_creation_time = _utc_now()
 
-        writer.submit(
-            "insert_experiment_row",
-            experiment_id,
-            config["experiment_name"],
-            config["experiment_type"],
-            experiment_creation_time,
-            None,
-            config["run_notes"],
-            int(config["n_generations"]),
-            int(config["n_rounds"]),
-            "GBM",
-            py_vers,
-            code_vers,
-            n_agents,
-            float(config["total_initial_cash"]),
-            int(config["total_initial_shares"]),
-            "call_auction",
-            "maximum_volume_minimum_imbalance",
-            "proportional_rationing",
-            "previous_price_proximity",
-            0.0,
-            config["info_param_distribution_type"],
-            config["distribution_data"],
-            config["signal_generator_noise_distribution"],
-            config["algorithm_name"],
-            config["algorithm_params"],
-            0.0,
-        )
+        if writer:
+            writer.submit(
+                "insert_experiment_row",
+                experiment_id, config["experiment_name"], config["experiment_type"],
+                experiment_creation_time, None, config["run_notes"], int(config["n_generations"]),
+                int(config["n_rounds"]), "GBM", py_vers, code_vers, n_agents,
+                float(config["total_initial_cash"]), int(config["total_initial_shares"]),
+                "call_auction", "maximum_volume_minimum_imbalance", "proportional_rationing",
+                "previous_price_proximity", 0.0, config["info_param_distribution_type"],
+                config["distribution_data"], config["signal_generator_noise_distribution"],
+                config["algorithm_name"], config["algorithm_params"], 0.0,
+            )
 
         for generation in range(int(config["n_generations"])):
             generation_id = generation + 1
@@ -424,69 +407,49 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
             )
 
             if progress_callback is not None:
-                progress_callback(
-                    {
-                        "event": "generation_started",
-                        "experiment_id": experiment_id,
-                        "generation_id": generation_id,
-                        "generation_index": generation,
-                        "n_generations": int(config["n_generations"]),
-                    }
-                )
+                progress_callback({
+                    "event": "generation_started",
+                    "experiment_id": experiment_id,
+                    "generation_id": generation_id,
+                    "generation_index": generation,
+                    "n_generations": int(config["n_generations"]),
+                })
 
-            writer.submit(
-                "insert_generation_row",
-                experiment_id,
-                generation_id,
-                creation_time,
-                None,
-                "STARTED",
-                0.0,
-            )
+            if writer:
+                writer.submit(
+                    "insert_generation_row",
+                    experiment_id, generation_id, creation_time, None, "STARTED", 0.0,
+                )
 
             seed = f"gbm_generation_{generation}_seed_{config['experiment_seed']}"
             fundamental_path = simulate_gbm(
-                float(config["GBM_S0"]),
-                float(config["GBM_volatility"]),
-                float(config["GBM_drift"]),
-                int(config["n_rounds"]),
-                seed,
+                float(config["GBM_S0"]), float(config["GBM_volatility"]),
+                float(config["GBM_drift"]), int(config["n_rounds"]), seed,
             )
 
             try:
                 final_score, game = play_game(
-                    population_spec,
-                    int(config["n_rounds"]),
-                    int(config["total_initial_shares"]),
-                    float(config["total_initial_cash"]),
-                    experiment_id,
-                    generation_id,
-                    config["info_param_distribution_type"],
-                    config["distribution_data"],
-                    config["signal_generator_noise_distribution"],
-                    S0=float(config["GBM_S0"]),
-                    gbm_volatility=float(config["GBM_volatility"]),
-                    fundamental_path=fundamental_path,
+                    population_spec, int(config["n_rounds"]), int(config["total_initial_shares"]),
+                    float(config["total_initial_cash"]), experiment_id, generation_id,
+                    config["info_param_distribution_type"], config["distribution_data"],
+                    config["signal_generator_noise_distribution"], S0=float(config["GBM_S0"]),
+                    gbm_volatility=float(config["GBM_volatility"]), fundamental_path=fundamental_path,
                     seed=seed,
                 )
             except GameExecutionError as exc:
-                failed_progress = (exc.current_round / int(config["n_rounds"])) * 100.0 if int(config["n_rounds"]) > 0 else 0.0
-                writer.submit(
-                    "update_generation_progress",
-                    experiment_id,
-                    generation_id,
-                    failed_progress,
-                    generation_status="FAILED",
-                )
+                if writer:
+                    failed_progress = (exc.current_round / int(config["n_rounds"])) * 100.0 if int(config["n_rounds"]) > 0 else 0.0
+                    writer.submit(
+                        "update_generation_progress", experiment_id, generation_id,
+                        failed_progress, generation_status="FAILED",
+                    )
                 raise exc.__cause__ if exc.__cause__ is not None else exc
             except Exception:
-                writer.submit(
-                    "update_generation_progress",
-                    experiment_id,
-                    generation_id,
-                    0.0,
-                    generation_status="FAILED",
-                )
+                if writer:
+                    writer.submit(
+                        "update_generation_progress", experiment_id, generation_id,
+                        0.0, generation_status="FAILED",
+                    )
                 raise
 
             last_game = game
@@ -514,59 +477,45 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
                 gen_entry["mean_volume"] = float("nan")
                 gen_entry["no_clear_rate"] = float("nan")
 
-            writer.submit(
-                "persist_generation_bundle",
-                experiment_id,
-                generation_id,
-                float(config["GBM_S0"]),
-                float(config["GBM_volatility"]),
-                float(config["GBM_drift"]),
-                seed,
-                tuple(enumerate(fundamental_path)),
-                game.agents,
-                game.market_round_records,
-                game.agent_round_records,
-                game.trade_execution_records,
-                _utc_now(),
-                gen_entry.get("mean_qty_aggression"),
-                gen_entry.get("mean_signal_aggression"),
-            )
-
-            strategy_performance_round = _build_strategy_performance_round_records(game)
-            strategy_performance_generation = _build_strategy_performance_generation_records(
-                strategy_performance_round,
-                generation_id,
-            )
+            if writer:
+                writer.submit(
+                    "persist_generation_bundle",
+                    experiment_id, generation_id, float(config["GBM_S0"]),
+                    float(config["GBM_volatility"]), float(config["GBM_drift"]), seed,
+                    tuple(enumerate(fundamental_path)), game.agents, game.market_round_records,
+                    game.agent_round_records, game.trade_execution_records, _utc_now(),
+                    gen_entry.get("mean_qty_aggression"), gen_entry.get("mean_signal_aggression"),
+                )
 
             if progress_callback is not None:
-                progress_callback(
-                    {
-                        "event": "generation_completed",
-                        "experiment_id": experiment_id,
-                        "generation_id": generation_id,
-                        "generation_index": generation,
-                        "n_generations": int(config["n_generations"]),
-                        "generation_metrics": {
-                            "generation_id": generation_id,
-                            "mean_qty_aggression": gen_entry.get("mean_qty_aggression"),
-                            "mean_signal_aggression": gen_entry.get("mean_signal_aggression"),
-                            "mean_info_param_parameterised_informed": gen_entry.get(
-                                "mean_info_param_parameterised_informed"
-                            ),
-                            "mean_info_param_zi": gen_entry.get("mean_info_param_zi"),
-                            "mean_wealth_parameterised_informed": gen_entry.get(
-                                "mean_wealth_parameterised_informed"
-                            ),
-                            "mean_wealth_zi": gen_entry.get("mean_wealth_zi"),
-                        },
-                        "market_history": list(game.market_round_records),
-                        "market_summary": _build_market_summary_records(game),
-                        "strategy_profit_per_round": _build_strategy_profit_records(game),
-                        "volume_share_per_round": _build_volume_share_records(game),
-                        "strategy_performance_round": strategy_performance_round,
-                        "strategy_performance_generation": strategy_performance_generation,
-                    }
+                # OPTIMIZATION 2: Only calculate these heavy dictionary mappings IF we are going to use them!
+                strategy_performance_round = _build_strategy_performance_round_records(game)
+                strategy_performance_generation = _build_strategy_performance_generation_records(
+                    strategy_performance_round, generation_id,
                 )
+                
+                progress_callback({
+                    "event": "generation_completed",
+                    "experiment_id": experiment_id,
+                    "generation_id": generation_id,
+                    "generation_index": generation,
+                    "n_generations": int(config["n_generations"]),
+                    "generation_metrics": {
+                        "generation_id": generation_id,
+                        "mean_qty_aggression": gen_entry.get("mean_qty_aggression"),
+                        "mean_signal_aggression": gen_entry.get("mean_signal_aggression"),
+                        "mean_info_param_parameterised_informed": gen_entry.get("mean_info_param_parameterised_informed"),
+                        "mean_info_param_zi": gen_entry.get("mean_info_param_zi"),
+                        "mean_wealth_parameterised_informed": gen_entry.get("mean_wealth_parameterised_informed"),
+                        "mean_wealth_zi": gen_entry.get("mean_wealth_zi"),
+                    },
+                    "market_history": list(game.market_round_records),
+                    "market_summary": _build_market_summary_records(game),
+                    "strategy_profit_per_round": _build_strategy_profit_records(game),
+                    "volume_share_per_round": _build_volume_share_records(game),
+                    "strategy_performance_round": strategy_performance_round,
+                    "strategy_performance_generation": strategy_performance_generation,
+                })
 
             if generation < int(config["n_generations"]) - 1:
                 evolvable_ids = {aid for aid, agent in game.agents.items() if agent.trader_type != "zi"}
@@ -586,7 +535,8 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
                 zi_cohort = [{"trader_type": "zi"} for _ in range(int(config["n_zi_agents"]))]
                 population_spec = zi_cohort + evolved
     finally:
-        writer.close()
+        if writer:
+            writer.close()
 
     generation_counts_df = pd.DataFrame(generation_counts)
     print("\nGeneration strategy counts:")
@@ -595,22 +545,17 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
     results_df = None
     if run_analysis and last_game is not None and last_final_score is not None:
         results_df = analyse_game_results(
-            last_game,
-            last_final_score,
-            title_prefix=f"{config['experiment_name']} | ",
-            generation_counts_df=generation_counts_df,
-            rolling_games=list(recent_games),
+            last_game, last_final_score, title_prefix=f"{config['experiment_name']} | ",
+            generation_counts_df=generation_counts_df, rolling_games=list(recent_games),
             rolling_scores=list(recent_scores),
         )
 
     if progress_callback is not None:
-        progress_callback(
-            {
-                "event": "experiment_completed",
-                "experiment_id": experiment_id,
-                "n_generations": int(config["n_generations"]),
-            }
-        )
+        progress_callback({
+            "event": "experiment_completed",
+            "experiment_id": experiment_id,
+            "n_generations": int(config["n_generations"]),
+        })
 
     return {
         "experiment_id": experiment_id,
