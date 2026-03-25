@@ -1,29 +1,8 @@
 """
-calibration.py
-==============
 Calibration script for the evolutionary call auction ABM.
 
 Run from the project root:
     python calibration.py
-
-Two calibration approaches are implemented:
-
-  OPTION 2 — Noise Trader Proportion Calibration
-  -----------------------------------------------
-  Justifies the 65 ZI / 35 informed split against empirical market
-  microstructure literature (Kyle, 1985; Glosten & Milgrom, 1985), which
-  estimates that roughly 60-70% of order flow in equity markets originates
-  from uninformed/liquidity traders rather than informed traders.
-
-  Runs short simulations across five informed/ZI splits and measures whether
-  each split produces a positive informed wealth premium — confirming that
-  information remains exploitable at the chosen ratio.
-
-  OPTION 3 — Grid Search Calibration (tent-peg via stylised facts)
-  -----------------------------------------------------------------
-  Varies two free parameters systematically:
-    - n_zi_agents     : number of noise traders  (controls market liquidity)
-    - info_param_high : upper bound of info_param (controls information asymmetry)
 
   For each combination, measures two stylised-fact benchmarks:
     1. Informed/ZI wealth premium > 0%
@@ -35,7 +14,7 @@ Two calibration approaches are implemented:
   The model's baseline configuration must sit inside this region.
 
 Outputs
--------
+
   calibration_results.csv  — full grid search table with pass/fail flags
   calibration_summary.txt  — human-readable summary for the report
 """
