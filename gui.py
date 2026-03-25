@@ -506,6 +506,39 @@ def _build_sweep_run_args(sweep_name: str, settings: dict) -> tuple[str, list[tu
     return title, run_args
 
 
+def _prepare_sweep_plot_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Trim and normalize sweep data to the columns the comparison plots actually consume."""
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    prepared_df = df.copy()
+    if "generation" not in prepared_df.columns and "generation_id" in prepared_df.columns:
+        prepared_df["generation"] = prepared_df["generation_id"].astype(int) - 1
+
+    needed_cols = {"generation", "generation_id", WEALTH_INFORMED_COL, WEALTH_ZI_COL}
+    for metric_key, _ in SWEEP_PARAM_SUBPLOTS:
+        needed_cols.add(metric_key)
+    for metric_key, _ in SWEEP_STD_SUBPLOTS:
+        needed_cols.add(metric_key)
+
+    keep_cols = [col for col in prepared_df.columns if col in needed_cols]
+    if not keep_cols:
+        return pd.DataFrame()
+
+    prepared_df = prepared_df[keep_cols].copy()
+    if "generation" in prepared_df.columns:
+        prepared_df["generation"] = prepared_df["generation"].astype(int)
+    if "generation_id" in prepared_df.columns:
+        prepared_df["generation_id"] = prepared_df["generation_id"].astype(int)
+
+    numeric_cols = [col for col in prepared_df.columns if col not in {"generation", "generation_id"}]
+    for col in numeric_cols:
+        prepared_df[col] = pd.to_numeric(prepared_df[col], errors="coerce")
+
+    sort_cols = ["generation"] if "generation" in prepared_df.columns else ["generation_id"]
+    return prepared_df.sort_values(sort_cols).reset_index(drop=True)
+
+
 def _comparison_payload_to_runs(experiments_df: pd.DataFrame, comparison_df: pd.DataFrame) -> list[dict]:
     if experiments_df.empty or comparison_df.empty:
         return []
@@ -1568,15 +1601,13 @@ class SweepComparisonWorker(QThread):
                                 [live_generation_df, pd.DataFrame([metrics])],
                                 ignore_index=True,
                             )
-                            live_generation_df = (
-                                live_generation_df.drop_duplicates(
-                                    subset=["generation_id"],
-                                    keep="last",
-                                )
-                                .sort_values("generation_id")
-                                .reset_index(drop=True)
+                            live_generation_df = live_generation_df.drop_duplicates(
+                                subset=["generation_id"],
+                                keep="last",
                             )
-                            payload["live_generation_df"] = live_generation_df.copy()
+                            payload["live_generation_df"] = _prepare_sweep_plot_dataframe(
+                                live_generation_df
+                            )
                     self.progress.emit(payload)
 
                 result = run_experiment(
@@ -1584,9 +1615,9 @@ class SweepComparisonWorker(QThread):
                     progress_callback=sweep_progress_callback,
                     run_analysis=False,
                 )
-                run_df = result["generation_counts_df"].reset_index(drop=True).copy()
-                if "generation" in run_df.columns:
-                    run_df["generation"] = run_df["generation"].astype(int)
+                run_df = _prepare_sweep_plot_dataframe(
+                    result["generation_counts_df"].reset_index(drop=True).copy()
+                )
                 indexed_results.append(
                     {
                         "label": label,
@@ -2996,9 +3027,9 @@ class CommandCenter(QMainWindow):
             )
         elif event == "generation_completed":
             run_index = int(payload["run_index"]) - 1
-            live_df = payload.get("live_generation_df", pd.DataFrame()).copy()
-            if not live_df.empty and "generation_id" in live_df.columns and "generation" not in live_df.columns:
-                live_df["generation"] = live_df["generation_id"].astype(int) - 1
+            live_df = _prepare_sweep_plot_dataframe(
+                payload.get("live_generation_df", pd.DataFrame()).copy()
+            )
             while len(self._comparison_sweep_payload["runs"]) <= run_index:
                 self._comparison_sweep_payload["runs"].append({})
             self._comparison_sweep_payload["runs"][run_index] = {
@@ -3019,7 +3050,9 @@ class CommandCenter(QMainWindow):
             self._comparison_sweep_payload["runs"][run_index] = {
                 "label": payload["run_label"],
                 "experiment_id": payload.get("experiment_id"),
-                "data": payload.get("data", pd.DataFrame()).copy(),
+                "data": _prepare_sweep_plot_dataframe(
+                    payload.get("data", pd.DataFrame()).copy()
+                ),
             }
             self._update_sweep_summary(self._comparison_sweep_payload)
             self._update_sweep_comparison_plots(self._comparison_sweep_payload["runs"])
