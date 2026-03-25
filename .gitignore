@@ -9,3 +9,4 @@ __pycache__/
 /Tests/.pytest_cache
 /.pytest_cache
 *.duckdb
+.claude/
