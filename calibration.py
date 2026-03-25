@@ -37,12 +37,3 @@ print(f"Final wealth premium: {df['wealth_premium_pct'].iloc[-1]:.1f}%")
 #------------------------------------------
 
 print(f"Mean no-clear rate: {df['no_clear_rate'].mean()*100:.1f}%")
-
-#------------------------------------------
-# 3. Output kurtosis — endogenous fat tails
-#------------------------------------------
-
-from scipy.stats import kurtosis
-
-# pool clearing price log-returns across all recent games
-# (recent_games is returned from run_experiment)
