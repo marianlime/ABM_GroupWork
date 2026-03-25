@@ -488,12 +488,12 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
                 )
 
             if progress_callback is not None:
-                # OPTIMIZATION 2: Only calculate these heavy dictionary mappings IF we are going to use them!
+                # Only build the heavier derived payloads when the GUI is actively consuming them.
                 strategy_performance_round = _build_strategy_performance_round_records(game)
                 strategy_performance_generation = _build_strategy_performance_generation_records(
                     strategy_performance_round, generation_id,
                 )
-                
+
                 progress_callback({
                     "event": "generation_completed",
                     "experiment_id": experiment_id,
@@ -501,13 +501,8 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
                     "generation_index": generation,
                     "n_generations": int(config["n_generations"]),
                     "generation_metrics": {
+                        **gen_entry,
                         "generation_id": generation_id,
-                        "mean_qty_aggression": gen_entry.get("mean_qty_aggression"),
-                        "mean_signal_aggression": gen_entry.get("mean_signal_aggression"),
-                        "mean_info_param_parameterised_informed": gen_entry.get("mean_info_param_parameterised_informed"),
-                        "mean_info_param_zi": gen_entry.get("mean_info_param_zi"),
-                        "mean_wealth_parameterised_informed": gen_entry.get("mean_wealth_parameterised_informed"),
-                        "mean_wealth_zi": gen_entry.get("mean_wealth_zi"),
                     },
                     "market_history": list(game.market_round_records),
                     "market_summary": _build_market_summary_records(game),
