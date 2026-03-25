@@ -1,5 +1,5 @@
 ABM Calibration Summary
-Generated: 2026-03-25 15:14:27
+Generated: 2026-03-25 16:23:14
 Generations per config: 10  |  Rounds: 25
 
 OPTION 2: Noise Trader Proportion
@@ -7,48 +7,56 @@ Literature: Kyle (1985), Glosten & Milgrom (1985)
 Target: 60-70% noise traders; baseline = 65%
 
  n_informed  n_zi  pct_noise  wealth_premium_pct  no_clear_rate  mean_volume  premium_positive  BASELINE
-         10    90         90               57.65            0.0       0.8030              True     False
-         25    75         75               42.73            0.0       0.8629              True     False
-         35    65         65               48.45            0.0       0.8748              True      True
-         50    50         50               51.90            0.0       0.6314              True     False
-         65    35         35               39.97            0.0       0.5831              True     False
+         10    90         90               58.91            0.0       0.7803              True     False
+         25    75         75               55.16            0.0       0.8136              True     False
+         35    65         65               51.19            0.0       0.7887              True      True
+         50    50         50               47.03            0.0       0.7019              True     False
+         65    35         35               41.78            0.0       0.6190              True     False
 
 OPTION 3: Grid Search
 Criteria: wealth_premium > 0%, no_clear_rate < 10%
 
  n_zi  n_informed  ip_high  wealth_premium_pct  no_clear_rate  mean_volume  premium_ok  ncr_ok  VALID  BASELINE
-   35          65     0.50               44.02            0.0       0.6292        True    True   True     False
-   35          65     0.75               43.71            0.0       0.5638        True    True   True     False
-   35          65     1.00               48.03            0.0       0.5821        True    True   True     False
-   35          65     1.50               45.16            0.0       0.5614        True    True   True     False
-   50          50     0.50               54.35            0.0       0.6767        True    True   True     False
-   50          50     0.75               48.15            0.0       0.7148        True    True   True     False
-   50          50     1.00               53.58            0.0       0.6545        True    True   True     False
-   50          50     1.50               47.96            0.0       0.7013        True    True   True     False
-   65          35     0.50               51.81            0.0       0.8340        True    True   True     False
-   65          35     0.75               40.88            0.0       0.8216        True    True   True     False
-   65          35     1.00               43.37            0.0       0.9165        True    True   True      True
-   65          35     1.50               42.61            0.0       0.7888        True    True   True     False
-   80          20     0.50               52.87            0.0       0.8071        True    True   True     False
-   80          20     0.75               53.63            0.0       0.7996        True    True   True     False
-   80          20     1.00               55.90            0.0       0.8195        True    True   True     False
-   80          20     1.50               58.24            0.0       0.8218        True    True   True     False
+   35          65     0.50               39.54            0.0       0.6197        True    True   True     False
+   35          65     0.75               51.55            0.0       0.6478        True    True   True     False
+   35          65     1.00               45.31            0.0       0.5125        True    True   True     False
+   35          65     1.50               48.15            0.0       0.5786        True    True   True     False
+   35          65     2.00               46.55            0.0       0.5423        True    True   True     False
+   50          50     0.50               50.61            0.0       0.7566        True    True   True     False
+   50          50     0.75               50.90            0.0       0.6673        True    True   True     False
+   50          50     1.00               51.37            0.0       0.6915        True    True   True     False
+   50          50     1.50               53.73            0.0       0.6713        True    True   True     False
+   50          50     2.00               49.19            0.0       0.6647        True    True   True     False
+   65          35     0.50               45.47            0.0       0.8366        True    True   True     False
+   65          35     0.75               42.29            0.0       0.9570        True    True   True     False
+   65          35     1.00               43.71            0.0       0.8180        True    True   True     False
+   65          35     1.50               42.78            0.0       0.9026        True    True   True     False
+   65          35     2.00               44.10            0.0       0.8898        True    True   True      True
+   80          20     0.50               57.36            0.0       0.8274        True    True   True     False
+   80          20     0.75               57.68            0.0       0.8345        True    True   True     False
+   80          20     1.00               49.59            0.0       0.8691        True    True   True     False
+   80          20     1.50               54.14            0.0       0.7721        True    True   True     False
+   80          20     2.00               59.14            0.0       0.8074        True    True   True     False
 
-Valid configurations (16):
+Valid configurations (20):
  n_zi  ip_high  wealth_premium_pct  no_clear_rate  BASELINE
-   35     0.50               44.02            0.0     False
-   35     0.75               43.71            0.0     False
-   35     1.00               48.03            0.0     False
-   35     1.50               45.16            0.0     False
-   50     0.50               54.35            0.0     False
-   50     0.75               48.15            0.0     False
-   50     1.00               53.58            0.0     False
-   50     1.50               47.96            0.0     False
-   65     0.50               51.81            0.0     False
-   65     0.75               40.88            0.0     False
-   65     1.00               43.37            0.0      True
-   65     1.50               42.61            0.0     False
-   80     0.50               52.87            0.0     False
-   80     0.75               53.63            0.0     False
-   80     1.00               55.90            0.0     False
-   80     1.50               58.24            0.0     False
+   35     0.50               39.54            0.0     False
+   35     0.75               51.55            0.0     False
+   35     1.00               45.31            0.0     False
+   35     1.50               48.15            0.0     False
+   35     2.00               46.55            0.0     False
+   50     0.50               50.61            0.0     False
+   50     0.75               50.90            0.0     False
+   50     1.00               51.37            0.0     False
+   50     1.50               53.73            0.0     False
+   50     2.00               49.19            0.0     False
+   65     0.50               45.47            0.0     False
+   65     0.75               42.29            0.0     False
+   65     1.00               43.71            0.0     False
+   65     1.50               42.78            0.0     False
+   65     2.00               44.10            0.0      True
+   80     0.50               57.36            0.0     False
+   80     0.75               57.68            0.0     False
+   80     1.00               49.59            0.0     False
+   80     1.50               54.14            0.0     False
+   80     2.00               59.14            0.0     False
