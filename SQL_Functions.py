@@ -284,6 +284,40 @@ def insert_agent_round_rows(con, records):
     """, data)
 
 
+def insert_trade_execution_rows(con, records):
+    if not records:
+        return
+
+    data = []
+    for r in records:
+        data.append((
+            r["experiment_id"],
+            r["generation_id"],
+            r["round_number"],
+            r["trade_id"],
+            r["buyer_agent_id"],
+            r["seller_agent_id"],
+            r["price"],
+            r["quantity"],
+            r["notional"],
+        ))
+
+    con.executemany("""
+        INSERT INTO trade_execution (
+            experiment_id,
+            generation_id,
+            round_number,
+            trade_id,
+            buyer_agent_id,
+            seller_agent_id,
+            price,
+            quantity,
+            notional
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, data)
+
+
 def update_generation_progress(con,
                                experiment_id,
                                generation_id,
@@ -372,6 +406,7 @@ def persist_generation_bundle(con,
                               agents,
                               market_round_records,
                               agent_round_records,
+                              trade_execution_records,
                               completion_time,
                               mean_qty_aggression,
                               mean_signal_aggression):
@@ -383,6 +418,7 @@ def persist_generation_bundle(con,
         insert_agent_population(con, experiment_id, generation_id, agents)
         insert_market_round_rows(con, market_round_records)
         insert_agent_round_rows(con, agent_round_records)
+        insert_trade_execution_rows(con, trade_execution_records)
         update_generation_progress(
             con,
             experiment_id,

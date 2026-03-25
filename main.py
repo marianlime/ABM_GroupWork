@@ -526,6 +526,7 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
                 game.agents,
                 game.market_round_records,
                 game.agent_round_records,
+                game.trade_execution_records,
                 _utc_now(),
                 gen_entry.get("mean_qty_aggression"),
                 gen_entry.get("mean_signal_aggression"),

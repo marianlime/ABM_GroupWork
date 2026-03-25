@@ -194,6 +194,24 @@ def create_database(DB_PATH):
         REFERENCES market_round(experiment_id, generation_id, round_number)
     );
     """)
+
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS trade_execution (
+    experiment_id                   VARCHAR(26) NOT NULL,
+    generation_id                   INTEGER NOT NULL,
+    round_number                    INTEGER NOT NULL,
+    trade_id                        INTEGER NOT NULL,
+    buyer_agent_id                  INTEGER NOT NULL,
+    seller_agent_id                 INTEGER NOT NULL,
+    price                           DOUBLE NOT NULL,
+    quantity                        DOUBLE NOT NULL,
+    notional                        DOUBLE NOT NULL,
+
+    PRIMARY KEY (experiment_id, generation_id, round_number, trade_id),
+    FOREIGN KEY (experiment_id, generation_id, round_number)
+        REFERENCES market_round(experiment_id, generation_id, round_number)
+    );
+    """)
     # --- Agent-Round-Level Meta-Analysis Views ---
 
     # 1. Agent Profit/Loss per Round

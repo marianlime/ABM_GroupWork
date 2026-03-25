@@ -11,6 +11,66 @@ import hashlib
 import numpy as np
 
 
+def _pair_trade_executions(trades, experiment_id, generation_id, round_number):
+    buy_trades = [
+        {
+            "agent_id": int(trade["agent_id"]),
+            "quantity": float(trade["quantity"]),
+            "price": float(trade["price"]),
+        }
+        for trade in trades
+        if trade["action"] == "buy" and float(trade["quantity"]) > 0
+    ]
+    sell_trades = [
+        {
+            "agent_id": int(trade["agent_id"]),
+            "quantity": float(trade["quantity"]),
+            "price": float(trade["price"]),
+        }
+        for trade in trades
+        if trade["action"] == "sell" and float(trade["quantity"]) > 0
+    ]
+
+    paired_records = []
+    buy_index = 0
+    sell_index = 0
+    trade_id = 1
+
+    while buy_index < len(buy_trades) and sell_index < len(sell_trades):
+        buy_trade = buy_trades[buy_index]
+        sell_trade = sell_trades[sell_index]
+        matched_qty = min(buy_trade["quantity"], sell_trade["quantity"])
+        if matched_qty <= 0:
+            break
+
+        trade_price = buy_trade["price"] if buy_trade["price"] == sell_trade["price"] else (
+            buy_trade["price"] + sell_trade["price"]
+        ) / 2.0
+        paired_records.append(
+            {
+                "experiment_id": experiment_id,
+                "generation_id": int(generation_id),
+                "round_number": int(round_number),
+                "trade_id": int(trade_id),
+                "buyer_agent_id": int(buy_trade["agent_id"]),
+                "seller_agent_id": int(sell_trade["agent_id"]),
+                "price": float(trade_price),
+                "quantity": float(matched_qty),
+                "notional": float(matched_qty * trade_price),
+            }
+        )
+        trade_id += 1
+
+        buy_trade["quantity"] -= matched_qty
+        sell_trade["quantity"] -= matched_qty
+        if buy_trade["quantity"] <= 1e-12:
+            buy_index += 1
+        if sell_trade["quantity"] <= 1e-12:
+            sell_index += 1
+
+    return paired_records
+
+
 def _stable_seed(namespace: str, experiment_id: str, generation_id: int) -> int:
     """Derive a stable, reproducible integer seed namespaced by purpose.
 
@@ -71,6 +131,7 @@ class Game:
 
         self.market_round_records = []
         self.agent_round_records = []
+        self.trade_execution_records = []
 
         self.S0_effective = float(self.S0) if self.S0 is not None else 1.0
 
@@ -388,6 +449,14 @@ class Game:
             "price_levels_bid": price_levels_bid,
             "price_levels_ask": price_levels_ask
         })
+        self.trade_execution_records.extend(
+            _pair_trade_executions(
+                trades,
+                experiment_id=self.experiment_id,
+                generation_id=self.generation_id,
+                round_number=current_round,
+            )
+        )
 
         for aid, rec in agent_round_records.items():
             s = exec_summary[aid]

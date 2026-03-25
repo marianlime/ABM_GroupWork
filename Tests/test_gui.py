@@ -13,6 +13,7 @@ from SQL_Functions import (
     insert_gbm_config_row,
     insert_generation_row,
     insert_market_round_rows,
+    insert_trade_execution_rows,
     update_generation_param_means,
 )
 
@@ -245,6 +246,33 @@ def _build_sample_db(db_path: Path):
                     },
                 ],
             )
+            insert_trade_execution_rows(
+                con,
+                [
+                    {
+                        "experiment_id": experiment_id,
+                        "generation_id": generation_id,
+                        "round_number": 0,
+                        "trade_id": 1,
+                        "buyer_agent_id": 1,
+                        "seller_agent_id": 2,
+                        "price": 101.0,
+                        "quantity": 1.0,
+                        "notional": 101.0,
+                    },
+                    {
+                        "experiment_id": experiment_id,
+                        "generation_id": generation_id,
+                        "round_number": 1,
+                        "trade_id": 1,
+                        "buyer_agent_id": 1,
+                        "seller_agent_id": 2,
+                        "price": 102.0,
+                        "quantity": 1.0,
+                        "notional": 102.0,
+                    },
+                ],
+            )
     finally:
         con.close()
 
@@ -273,6 +301,7 @@ def test_database_loader_worker_reads_full_payload():
         assert payload["market_history"].shape[0] == 2
         assert payload["population"].shape[0] == 2
         assert payload["agent_round"].shape[0] == 4
+        assert payload["trade_execution"].shape[0] == 2
     finally:
         if db_path.exists():
             db_path.unlink()
@@ -315,6 +344,7 @@ def test_command_center_populates_widgets_from_payload(monkeypatch):
             assert len(window.agent_info_param_plot.listDataItems()) == 1
             assert len(window.agent_qty_aggression_plot.listDataItems()) == 1
             assert len(window.agent_signal_aggression_plot.listDataItems()) == 1
+            assert window.microstructure_summary_label.text()
         finally:
             window.close()
             app.processEvents()
@@ -381,7 +411,7 @@ def test_command_center_start_new_run_builds_config(monkeypatch):
         assert captured["config_overrides"]["n_zi_agents"] == 7
         assert captured["config_overrides"]["n_parameterised_agents"] == 8
         assert captured["config_overrides"]["algorithm_params"]["mutation_rate"] == 0.11
-        assert window.tabs.count() == 4
+        assert window.tabs.count() == 6
     finally:
         window.close()
         app.processEvents()

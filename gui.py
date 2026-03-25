@@ -4,9 +4,11 @@ live generation monitoring, database browsing, and multi-experiment comparison.
 """
 
 import sys
+from ast import literal_eval
 from pathlib import Path
 
 import duckdb
+import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 from PySide6.QtGui import QColor
@@ -15,6 +17,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -62,6 +65,22 @@ COMPARISON_LINE_COLORS = [
     (0, 206, 209),
     (205, 92, 92),
 ]
+BATCH_CONFIG_ALIASES = {
+    "name": "experiment_name",
+    "type": "experiment_type",
+    "notes": "run_notes",
+    "seed": "experiment_seed",
+    "generations": "n_generations",
+    "rounds": "n_rounds",
+    "zi_agents": "n_zi_agents",
+    "informed_agents": "n_parameterised_agents",
+    "cash": "total_initial_cash",
+    "shares": "total_initial_shares",
+    "s0": "GBM_S0",
+    "volatility": "GBM_volatility",
+    "drift": "GBM_drift",
+    "mutation_rate": "algorithm_params.mutation_rate",
+}
 
 
 def _humanize_sql_object_name(name: str) -> str:
@@ -78,17 +97,170 @@ def _humanize_sql_object_name(name: str) -> str:
 
 def _style_plot(plot):
     plot.showGrid(x=True, y=True, alpha=0.25)
+    plot.getAxis("left").enableAutoSIPrefix(False)
+    plot.getAxis("bottom").enableAutoSIPrefix(False)
 
 
 def _set_plot_bottom_label(plot, x_label: str, legend_items=None):
     label_html = f"<span style='color: {GRAPH_FOREGROUND};'>{x_label}</span>"
     if legend_items:
-        legend_html = "   ".join(
+        legend_html = "<br>".join(
             f"<span style='color: rgb({color[0]}, {color[1]}, {color[2]});'>&#9632; {name}</span>"
             for name, color in legend_items
         )
-        label_html += f"<br><span style='font-size: 10pt;'>{legend_html}</span>"
+        label_html += f"<br><span style='font-size: 9pt;'>{legend_html}</span>"
     plot.setLabel("bottom", label_html)
+
+
+def _format_run_label_html(legend_items):
+    if not legend_items:
+        return f"<span style='color: {GRAPH_FOREGROUND};'>No runs selected.</span>"
+    return "<br>".join(
+        f"<span style='color: rgb({color[0]}, {color[1]}, {color[2]});'>&#9632; {name}</span>"
+        for name, color in legend_items
+    )
+
+
+def _pair_trade_links_from_agent_round(agent_round_df: pd.DataFrame) -> pd.DataFrame:
+    if agent_round_df.empty:
+        return pd.DataFrame()
+
+    required_cols = {"round_number", "agent_id", "action", "executed_qty", "executed_price_avg"}
+    if not required_cols.issubset(agent_round_df.columns):
+        return pd.DataFrame()
+
+    records = []
+    for round_number, round_df in agent_round_df.groupby("round_number", sort=True):
+        buyers = [
+            {
+                "agent_id": int(row["agent_id"]),
+                "remaining_qty": float(row["executed_qty"]),
+                "price": float(row["executed_price_avg"]) if pd.notna(row["executed_price_avg"]) else float("nan"),
+            }
+            for _, row in round_df.iterrows()
+            if row["action"] == "buy" and pd.notna(row["executed_qty"]) and float(row["executed_qty"]) > 0
+        ]
+        sellers = [
+            {
+                "agent_id": int(row["agent_id"]),
+                "remaining_qty": float(row["executed_qty"]),
+                "price": float(row["executed_price_avg"]) if pd.notna(row["executed_price_avg"]) else float("nan"),
+            }
+            for _, row in round_df.iterrows()
+            if row["action"] == "sell" and pd.notna(row["executed_qty"]) and float(row["executed_qty"]) > 0
+        ]
+
+        buyer_idx = 0
+        seller_idx = 0
+        trade_id = 1
+        while buyer_idx < len(buyers) and seller_idx < len(sellers):
+            buyer = buyers[buyer_idx]
+            seller = sellers[seller_idx]
+            matched_qty = min(buyer["remaining_qty"], seller["remaining_qty"])
+            if matched_qty <= 1e-12:
+                break
+
+            if not np.isnan(buyer["price"]) and not np.isnan(seller["price"]):
+                trade_price = (buyer["price"] + seller["price"]) / 2.0
+            elif not np.isnan(buyer["price"]):
+                trade_price = buyer["price"]
+            elif not np.isnan(seller["price"]):
+                trade_price = seller["price"]
+            else:
+                trade_price = 0.0
+
+            records.append(
+                {
+                    "round_number": int(round_number),
+                    "trade_id": int(trade_id),
+                    "buyer_agent_id": int(buyer["agent_id"]),
+                    "seller_agent_id": int(seller["agent_id"]),
+                    "price": float(trade_price),
+                    "quantity": float(matched_qty),
+                    "notional": float(matched_qty * trade_price),
+                }
+            )
+            trade_id += 1
+            buyer["remaining_qty"] -= matched_qty
+            seller["remaining_qty"] -= matched_qty
+            if buyer["remaining_qty"] <= 1e-12:
+                buyer_idx += 1
+            if seller["remaining_qty"] <= 1e-12:
+                seller_idx += 1
+
+    return pd.DataFrame(records)
+
+
+def _parse_batch_value(raw_value: str):
+    value = raw_value.strip()
+    lowered = value.lower()
+    if lowered in {"true", "false"}:
+        return lowered == "true"
+    try:
+        return literal_eval(value)
+    except Exception:
+        return value
+
+
+def _set_nested_config_value(config: dict, key_path: str, value):
+    path_parts = key_path.split(".")
+    target = config
+    for part in path_parts[:-1]:
+        if part not in target or not isinstance(target[part], dict):
+            target[part] = {}
+        else:
+            target[part] = dict(target[part])
+        target = target[part]
+    target[path_parts[-1]] = value
+
+
+def _load_batch_run_configs(file_path: str, default_db_path: str) -> list[dict]:
+    path = Path(file_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Batch parameter file not found: {path}")
+
+    configs = []
+    current_block = {}
+    with path.open("r", encoding="utf-8") as handle:
+        for line_number, raw_line in enumerate(handle, start=1):
+            line = raw_line.strip()
+            if not line or line == "---":
+                if current_block:
+                    configs.append(current_block)
+                    current_block = {}
+                continue
+            if line.startswith("#"):
+                continue
+            if "=" not in line:
+                raise ValueError(
+                    f"Invalid batch file format on line {line_number}: expected key=value."
+                )
+            key, value = [part.strip() for part in line.split("=", 1)]
+            if not key:
+                raise ValueError(f"Invalid batch file format on line {line_number}: missing key.")
+            current_block[key] = _parse_batch_value(value)
+
+    if current_block:
+        configs.append(current_block)
+
+    if not configs:
+        raise ValueError("No runs were found in the batch parameter file.")
+
+    parsed_configs = []
+    for index, raw_config in enumerate(configs, start=1):
+        config = {
+            "db_path": default_db_path,
+            "algorithm_params": dict(DEFAULT_EXPERIMENT_CONFIG["algorithm_params"]),
+        }
+        for raw_key, value in raw_config.items():
+            normalised_key = BATCH_CONFIG_ALIASES.get(raw_key, raw_key)
+            _set_nested_config_value(config, normalised_key, value)
+        config.setdefault("experiment_name", f"Batch Run {index}")
+        config.setdefault("experiment_type", DEFAULT_EXPERIMENT_CONFIG["experiment_type"])
+        config.setdefault("run_notes", DEFAULT_EXPERIMENT_CONFIG["run_notes"])
+        parsed_configs.append(config)
+
+    return parsed_configs
 
 
 class DatabaseLoaderWorker(QThread):
@@ -167,6 +339,7 @@ class DatabaseLoaderWorker(QThread):
             sql_objects = {}
             population_df = pd.DataFrame()
             agent_round_df = pd.DataFrame()
+            trade_execution_df = pd.DataFrame()
             selected_generation_id = self.generation_id
 
             if selected_experiment_id is not None:
@@ -323,7 +496,16 @@ class DatabaseLoaderWorker(QThread):
                         mr.best_bid,
                         mr.best_ask,
                         mr.volume,
-                        mr.n_trades
+                        mr.n_trades,
+                        mr.demand_at_p,
+                        mr.supply_at_p,
+                        mr.n_active_buyers,
+                        mr.n_active_sellers,
+                        mr.n_active_total,
+                        mr.bid_depth_total,
+                        mr.ask_depth_total,
+                        mr.price_levels_bid,
+                        mr.price_levels_ask
                     FROM market_round mr
                     LEFT JOIN fundamental_series fs
                       ON mr.experiment_id = fs.experiment_id
@@ -659,6 +841,23 @@ class DatabaseLoaderWorker(QThread):
                     [selected_experiment_id, selected_generation_id],
                 ).fetchdf()
 
+                trade_execution_df = con.execute(
+                    """
+                    SELECT
+                        round_number,
+                        trade_id,
+                        buyer_agent_id,
+                        seller_agent_id,
+                        price,
+                        quantity,
+                        notional
+                    FROM trade_execution
+                    WHERE experiment_id = ? AND generation_id = ?
+                    ORDER BY round_number, trade_id
+                    """,
+                    [selected_experiment_id, selected_generation_id],
+                ).fetchdf()
+
             object_rows = con.execute(
                 """
                 SELECT
@@ -750,6 +949,7 @@ class DatabaseLoaderWorker(QThread):
                 "sql_objects": sql_objects,
                 "population": population_df,
                 "agent_round": agent_round_df,
+                "trade_execution": trade_execution_df,
                 "selected_experiment_id": selected_experiment_id,
                 "selected_generation_id": selected_generation_id,
             }
@@ -776,6 +976,69 @@ class ExperimentRunnerWorker(QThread):
                 run_analysis=True,
             )
             self.completed.emit(result)
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
+class BatchExperimentRunnerWorker(QThread):
+    progress = Signal(dict)
+    completed = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, config_batch):
+        super().__init__()
+        self.config_batch = config_batch
+
+    def run(self):
+        completed_results = []
+        total_runs = len(self.config_batch)
+        try:
+            self.progress.emit(
+                {
+                    "event": "batch_started",
+                    "total_runs": total_runs,
+                }
+            )
+            for run_index, config_overrides in enumerate(self.config_batch, start=1):
+                run_name = str(config_overrides.get("experiment_name", f"Batch Run {run_index}"))
+                self.progress.emit(
+                    {
+                        "event": "batch_run_started",
+                        "run_index": run_index,
+                        "total_runs": total_runs,
+                        "run_name": run_name,
+                    }
+                )
+
+                def batch_progress_callback(payload):
+                    payload = dict(payload)
+                    payload["batch_run_index"] = run_index
+                    payload["batch_total_runs"] = total_runs
+                    payload["batch_run_name"] = run_name
+                    self.progress.emit(payload)
+
+                result = run_experiment(
+                    config_overrides=config_overrides,
+                    progress_callback=batch_progress_callback,
+                    run_analysis=True,
+                )
+                completed_results.append(result)
+                self.progress.emit(
+                    {
+                        "event": "batch_run_completed",
+                        "run_index": run_index,
+                        "total_runs": total_runs,
+                        "run_name": run_name,
+                        "experiment_id": result.get("experiment_id"),
+                    }
+                )
+
+            self.completed.emit(
+                {
+                    "runs": completed_results,
+                    "total_runs": total_runs,
+                }
+            )
         except Exception as exc:
             self.error.emit(str(exc))
 
@@ -959,9 +1222,11 @@ class CommandCenter(QMainWindow):
 
         self._current_experiment_id = None
         self._current_generation_id = None
+        self._microstructure_round = None
         self._suppress_selection_signals = False
         self.worker = None
         self.run_worker = None
+        self.batch_run_worker = None
         self.compare_worker = None
         self.live_generations_df = pd.DataFrame()
         self.live_strategy_generation_df = pd.DataFrame()
@@ -1012,6 +1277,8 @@ class CommandCenter(QMainWindow):
         self._build_strategy_performance_tab()
         self.agent_performance_tab = QWidget()
         self._build_agent_performance_tab()
+        self.microstructure_tab = QWidget()
+        self._build_microstructure_tab()
         self.comparison_tab = QWidget()
         self._build_comparison_tab()
         self.sql_tab = QTabWidget()
@@ -1020,6 +1287,7 @@ class CommandCenter(QMainWindow):
         self.tabs.addTab(self.dashboard_tab, "Dashboard")
         self.tabs.addTab(self.strategy_performance_tab, "Strategy Performance")
         self.tabs.addTab(self.agent_performance_tab, "Agent Performance")
+        self.tabs.addTab(self.microstructure_tab, "Market Microstructure")
         self.tabs.addTab(self.comparison_tab, "Run Comparison")
         self.tabs.addTab(self.sql_tab, "SQL Data")
 
@@ -1127,6 +1395,35 @@ class CommandCenter(QMainWindow):
         )
         self.btn_start_run.clicked.connect(self.start_new_run)
         left_layout.addWidget(self.btn_start_run)
+
+        batch_group = QGroupBox("Run Batch From Text File")
+        batch_layout = QVBoxLayout()
+        batch_help = QLabel(
+            "Use a .txt file with key=value pairs, separated by blank lines or --- between runs."
+        )
+        batch_help.setWordWrap(True)
+        batch_path_row = QHBoxLayout()
+        self.batch_file_input = QLineEdit()
+        self.batch_file_input.setPlaceholderText("Select a .txt parameter file")
+        self.btn_browse_batch_file = QPushButton("Browse...")
+        self.btn_browse_batch_file.clicked.connect(self.browse_batch_file)
+        batch_path_row.addWidget(self.batch_file_input, stretch=1)
+        batch_path_row.addWidget(self.btn_browse_batch_file)
+        self.batch_format_label = QLabel(
+            "Example: experiment_name=Run A, n_generations=50, GBM_drift=0.02, mutation_rate=0.05"
+        )
+        self.batch_format_label.setWordWrap(True)
+        self.btn_start_batch_run = QPushButton("Run Batch File")
+        self.btn_start_batch_run.setStyleSheet(
+            "background-color: #7b4bb7; color: white; font-weight: bold; padding: 10px;"
+        )
+        self.btn_start_batch_run.clicked.connect(self.start_batch_run)
+        batch_layout.addWidget(batch_help)
+        batch_layout.addLayout(batch_path_row)
+        batch_layout.addWidget(self.batch_format_label)
+        batch_layout.addWidget(self.btn_start_batch_run)
+        batch_group.setLayout(batch_layout)
+        left_layout.addWidget(batch_group)
 
         self.btn_stop_run = QPushButton("Stop Current Run")
         self.btn_stop_run.setStyleSheet(
@@ -1355,6 +1652,9 @@ class CommandCenter(QMainWindow):
         self.comparison_param_area = pg.GraphicsLayoutWidget()
         self.comparison_param_area.setMinimumHeight(1300)
         parameter_layout.addWidget(self.comparison_param_area)
+        self.comparison_param_runs_label = QLabel("No runs selected.")
+        self.comparison_param_runs_label.setWordWrap(True)
+        parameter_layout.addWidget(self.comparison_param_runs_label)
         content_layout.addWidget(parameter_group)
 
         wealth_group = QGroupBox("Wealth Difference Across Generations")
@@ -1362,6 +1662,9 @@ class CommandCenter(QMainWindow):
         self.comparison_wealth_area = pg.GraphicsLayoutWidget()
         self.comparison_wealth_area.setMinimumHeight(450)
         wealth_layout.addWidget(self.comparison_wealth_area)
+        self.comparison_wealth_runs_label = QLabel("No runs selected.")
+        self.comparison_wealth_runs_label.setWordWrap(True)
+        wealth_layout.addWidget(self.comparison_wealth_runs_label)
         content_layout.addWidget(wealth_group)
 
         comparison_scroll.setWidget(content)
@@ -1376,7 +1679,6 @@ class CommandCenter(QMainWindow):
             _style_plot(plot)
             plot.setLabel("left", "Value")
             plot.setLabel("bottom", "Generation")
-            plot.addLegend(offset=(10, 10))
             self.comparison_param_plots[metric_key] = plot
             self.comparison_param_curves[metric_key] = {}
             self.comparison_plot_titles[metric_key] = title
@@ -1390,12 +1692,93 @@ class CommandCenter(QMainWindow):
         _style_plot(wealth_plot)
         wealth_plot.setLabel("left", "Wealth Difference")
         wealth_plot.setLabel("bottom", "Generation")
-        wealth_plot.addLegend(offset=(10, 10))
         wealth_plot.addLine(y=0, pen=pg.mkPen((255, 255, 255, 100), width=1, style=Qt.DashLine))
         self.comparison_wealth_plots[wealth_metric_key] = wealth_plot
         self.comparison_plot_titles[wealth_metric_key] = wealth_title
         self.comparison_wealth_area.ci.layout.setColumnStretchFactor(0, 1)
         self.comparison_wealth_area.ci.layout.setColumnStretchFactor(1, 1)
+
+    def _build_microstructure_tab(self):
+        layout = QVBoxLayout(self.microstructure_tab)
+        microstructure_scroll = QScrollArea()
+        microstructure_scroll.setWidgetResizable(True)
+        microstructure_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        layout.addWidget(microstructure_scroll)
+
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+
+        summary_group = QGroupBox("Microstructure Overview")
+        summary_layout = QVBoxLayout(summary_group)
+        self.microstructure_summary_label = QLabel(
+            "Load an experiment and generation to inspect market microstructure."
+        )
+        self.microstructure_summary_label.setWordWrap(True)
+        summary_layout.addWidget(self.microstructure_summary_label)
+        self.micro_round_slider = QSlider(Qt.Horizontal)
+        self.micro_round_slider.setEnabled(False)
+        self.micro_round_slider.setMinimum(0)
+        self.micro_round_slider.setMaximum(0)
+        self.micro_round_slider.setValue(0)
+        self.micro_round_slider.valueChanged.connect(self._on_micro_round_changed)
+        self.micro_round_slider_label = QLabel("Trade network round: unavailable")
+        summary_layout.addWidget(self.micro_round_slider)
+        summary_layout.addWidget(self.micro_round_slider_label)
+        content_layout.addWidget(summary_group)
+
+        self.microstructure_area = pg.GraphicsLayoutWidget()
+        self.microstructure_area.setMinimumHeight(1800)
+        content_layout.addWidget(self.microstructure_area)
+        microstructure_scroll.setWidget(content)
+
+        self.micro_lob_title = "Limit Order Book Snapshot"
+        self.micro_candle_title = "Candlestick View"
+        self.micro_network_title = "Trade Network"
+        self.micro_pressure_title = "Order Imbalance and Spread"
+        self.micro_activity_title = "Participation and Volume"
+
+        self.micro_lob_plot = self.microstructure_area.addPlot(
+            title=self._format_plot_title(self.micro_lob_title)
+        )
+        _style_plot(self.micro_lob_plot)
+        self.micro_lob_plot.setLabel("left", "Order Qty")
+        self.micro_lob_plot.setLabel("bottom", "Limit Price")
+
+        self.micro_candle_plot = self.microstructure_area.addPlot(
+            title=self._format_plot_title(self.micro_candle_title)
+        )
+        _style_plot(self.micro_candle_plot)
+        self.micro_candle_plot.setLabel("left", "Price")
+        self.micro_candle_plot.setLabel("bottom", "Round")
+
+        self.microstructure_area.nextRow()
+
+        self.micro_network_plot = self.microstructure_area.addPlot(
+            title=self._format_plot_title(self.micro_network_title)
+        )
+        _style_plot(self.micro_network_plot)
+        self.micro_network_plot.setLabel("left", "Y")
+        self.micro_network_plot.setLabel("bottom", "X")
+        self.micro_network_plot.hideAxis("left")
+        self.micro_network_plot.hideAxis("bottom")
+
+        self.micro_pressure_plot = self.microstructure_area.addPlot(
+            title=self._format_plot_title(self.micro_pressure_title)
+        )
+        _style_plot(self.micro_pressure_plot)
+        self.micro_pressure_plot.setLabel("left", "Value")
+        self.micro_pressure_plot.setLabel("bottom", "Round")
+
+        self.microstructure_area.nextRow()
+
+        self.micro_activity_plot = self.microstructure_area.addPlot(
+            title=self._format_plot_title(self.micro_activity_title)
+        )
+        _style_plot(self.micro_activity_plot)
+        self.micro_activity_plot.setLabel("left", "Value")
+        self.micro_activity_plot.setLabel("bottom", "Round")
+        self.microstructure_area.ci.layout.setColumnStretchFactor(0, 1)
+        self.microstructure_area.ci.layout.setColumnStretchFactor(1, 1)
 
     def _build_strategy_performance_tab(self):
         layout = QVBoxLayout(self.strategy_performance_tab)
@@ -1698,8 +2081,61 @@ class CommandCenter(QMainWindow):
         self.tabs.setCurrentWidget(self.comparison_tab)
         self.comparison_status_label.setText("Comparison loaded.")
 
+    def browse_batch_file(self):
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Batch Parameter File",
+            "",
+            "Text Files (*.txt);;All Files (*)",
+        )
+        if file_path:
+            self.batch_file_input.setText(file_path)
+
+    def start_batch_run(self):
+        if self.run_worker is not None or self.batch_run_worker is not None:
+            QMessageBox.information(self, "Run In Progress", "A run is already in progress.")
+            return
+        if self.worker is not None:
+            QMessageBox.information(
+                self,
+                "Database Busy",
+                "Please wait for the current database refresh to finish before starting a batch run.",
+            )
+            return
+
+        file_path = self.batch_file_input.text().strip()
+        if not file_path:
+            QMessageBox.warning(self, "Missing Batch File", "Please choose a .txt parameter file.")
+            return
+
+        try:
+            config_batch = _load_batch_run_configs(
+                file_path=file_path,
+                default_db_path=self.input_db_path.text().strip(),
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Invalid Batch File", str(exc))
+            return
+
+        self._reset_live_run_state()
+        self.tabs.setCurrentWidget(self.dashboard_tab)
+        self.btn_start_run.setEnabled(False)
+        self.btn_start_batch_run.setEnabled(False)
+        self.run_status_label.setText(
+            f"Starting batch run with {len(config_batch)} configuration(s)..."
+        )
+
+        self.batch_run_worker = BatchExperimentRunnerWorker(config_batch)
+        self.batch_run_worker.progress.connect(self._handle_run_progress)
+        self.batch_run_worker.completed.connect(self._handle_batch_run_completed)
+        self.batch_run_worker.error.connect(self._handle_run_error)
+        self.batch_run_worker.finished.connect(self._batch_run_worker_finished)
+        self.batch_run_worker.start()
+
+        self.btn_stop_run.setEnabled(True)
+
     def start_new_run(self):
-        if self.run_worker is not None:
+        if self.run_worker is not None or self.batch_run_worker is not None:
             QMessageBox.information(self, "Run In Progress", "A run is already in progress.")
             return
         if self.worker is not None:
@@ -1735,23 +2171,11 @@ class CommandCenter(QMainWindow):
         config_overrides["algorithm_params"] = dict(DEFAULT_EXPERIMENT_CONFIG["algorithm_params"])
         config_overrides["algorithm_params"]["mutation_rate"] = mutation_rate
 
-        self.live_generations_df = pd.DataFrame(
-            columns=[
-                "generation_id",
-                "mean_qty_aggression",
-                "mean_signal_aggression",
-                "mean_info_param_parameterised_informed",
-                "mean_info_param_zi",
-                "mean_wealth_parameterised_informed",
-                "mean_wealth_zi",
-            ]
-        )
-        self.live_strategy_generation_df = pd.DataFrame()
-        self.live_strategy_round_df = pd.DataFrame()
-        self._clear_round_plots()
+        self._reset_live_run_state()
         self.tabs.setCurrentWidget(self.dashboard_tab)
 
         self.btn_start_run.setEnabled(False)
+        self.btn_start_batch_run.setEnabled(False)
         self.run_status_label.setText("Starting experiment...")
 
         self.run_worker = ExperimentRunnerWorker(config_overrides)
@@ -1769,8 +2193,15 @@ class CommandCenter(QMainWindow):
 
     def _run_worker_finished(self):
         self.btn_start_run.setEnabled(True)
+        self.btn_start_batch_run.setEnabled(True)
         self.btn_stop_run.setEnabled(False)
         self.run_worker = None
+
+    def _batch_run_worker_finished(self):
+        self.btn_start_run.setEnabled(True)
+        self.btn_start_batch_run.setEnabled(True)
+        self.btn_stop_run.setEnabled(False)
+        self.batch_run_worker = None
 
     def _show_error(self, message):
         self.status_label.setText("Load failed.")
@@ -1784,10 +2215,31 @@ class CommandCenter(QMainWindow):
 
     def _handle_run_progress(self, payload):
         event = payload.get("event")
+        if event == "batch_started":
+            self.run_status_label.setText(
+                f"Batch started: {payload['total_runs']} run(s) queued."
+            )
+            return
+
+        if event == "batch_run_started":
+            self._reset_live_run_state()
+            self.run_status_label.setText(
+                f"Starting batch run {payload['run_index']} of {payload['total_runs']}: "
+                f"{payload['run_name']}"
+            )
+            return
+
+        batch_prefix = ""
+        if "batch_run_index" in payload and "batch_total_runs" in payload:
+            batch_prefix = (
+                f"Batch run {payload['batch_run_index']} of {payload['batch_total_runs']} | "
+            )
+
         if event == "generation_started":
             self._current_experiment_id = payload.get("experiment_id")
             self.run_status_label.setText(
-                f"Running generation {payload['generation_id']} of {payload['n_generations']}..."
+                f"{batch_prefix}Running generation {payload['generation_id']} "
+                f"of {payload['n_generations']}..."
             )
             return
 
@@ -1861,7 +2313,8 @@ class CommandCenter(QMainWindow):
                 )
 
             self.run_status_label.setText(
-                f"Completed generation {payload['generation_id']} of {payload['n_generations']}."
+                f"{batch_prefix}Completed generation {payload['generation_id']} "
+                f"of {payload['n_generations']}."
             )
             self.summary_label.setText(
                 "\n".join(
@@ -1874,8 +2327,17 @@ class CommandCenter(QMainWindow):
             )
             return
 
+        if event == "batch_run_completed":
+            self.run_status_label.setText(
+                f"Completed batch run {payload['run_index']} of {payload['total_runs']}: "
+                f"{payload['run_name']}"
+            )
+            return
+
         if event == "experiment_completed":
-            self.run_status_label.setText(f"Experiment {payload['experiment_id']} completed.")
+            self.run_status_label.setText(
+                f"{batch_prefix}Experiment {payload['experiment_id']} completed."
+            )
 
     def _handle_run_completed(self, result):
         self._current_experiment_id = result["experiment_id"]
@@ -1885,15 +2347,49 @@ class CommandCenter(QMainWindow):
         )
         self.refresh_data()
 
+    def _handle_batch_run_completed(self, result):
+        total_runs = int(result.get("total_runs", 0))
+        completed_runs = result.get("runs", [])
+        if completed_runs:
+            self._current_experiment_id = completed_runs[-1]["experiment_id"]
+            self._current_generation_id = None
+        self.run_status_label.setText(
+            f"Finished batch run file. Completed {total_runs} experiment(s)."
+        )
+        self.refresh_data()
+
     def stop_run(self):
         if self.run_worker is not None:
             self.run_worker.terminate()
             self.run_status_label.setText("Run stopped by user.")
             self.btn_stop_run.setEnabled(False)
+            return
+        if self.batch_run_worker is not None:
+            self.batch_run_worker.terminate()
+            self.run_status_label.setText("Batch run stopped by user.")
+            self.btn_stop_run.setEnabled(False)
 
     def _handle_run_error(self, message):
         self.run_status_label.setText("Run failed.")
         QMessageBox.critical(self, "Run Error", message)
+
+    def _reset_live_run_state(self):
+        self.live_generations_df = pd.DataFrame(
+            columns=[
+                "generation_id",
+                "mean_qty_aggression",
+                "mean_signal_aggression",
+                "mean_threshold",
+                "mean_signal_clip",
+                "mean_info_param_parameterised_informed",
+                "mean_info_param_zi",
+                "mean_wealth_parameterised_informed",
+                "mean_wealth_zi",
+            ]
+        )
+        self.live_strategy_generation_df = pd.DataFrame()
+        self.live_strategy_round_df = pd.DataFrame()
+        self._clear_round_plots()
 
     def _apply_payload(self, payload):
         self._last_payload = payload
@@ -1958,6 +2454,7 @@ class CommandCenter(QMainWindow):
             payload["agent_execution_price_deviation"],
             "execution_price_deviation",
         )
+        self._update_microstructure_tab(payload)
 
         self.status_label.setText("Loaded data from DuckDB.")
 
@@ -2125,6 +2622,11 @@ class CommandCenter(QMainWindow):
         self.plot_market.setTitle(self._format_plot_title(self.plot_market_title))
         self.plot_profit.setTitle(self._format_plot_title(self.plot_profit_title))
         self.plot_volume_share.setTitle(self._format_plot_title(self.plot_volume_share_title))
+        self.micro_lob_plot.setTitle(self._format_plot_title(self.micro_lob_title))
+        self.micro_candle_plot.setTitle(self._format_plot_title(self.micro_candle_title))
+        self.micro_network_plot.setTitle(self._format_plot_title(self.micro_network_title))
+        self.micro_pressure_plot.setTitle(self._format_plot_title(self.micro_pressure_title))
+        self.micro_activity_plot.setTitle(self._format_plot_title(self.micro_activity_title))
 
         for plot, base_title in self.performance_generation_plots.values():
             plot.setTitle(self._format_plot_title(base_title))
@@ -2223,6 +2725,7 @@ class CommandCenter(QMainWindow):
             self._last_payload["agent_execution_price_deviation"],
             "execution_price_deviation",
         )
+        self._update_microstructure_tab(self._last_payload)
         if self._comparison_payload is not None:
             self._update_comparison_plots(
                 self._comparison_payload.get("comparison_metrics", pd.DataFrame()),
@@ -2535,22 +3038,417 @@ class CommandCenter(QMainWindow):
         table.resizeColumnsToContents()
         table.resizeRowsToContents()
 
+    def _update_microstructure_tab(self, payload):
+        market_history_df = payload.get("market_history", pd.DataFrame())
+        market_summary_df = payload.get("market_summary", pd.DataFrame())
+        agent_round_df = payload.get("agent_round", pd.DataFrame())
+        population_df = payload.get("population", pd.DataFrame())
+        trade_execution_df = payload.get("trade_execution", pd.DataFrame())
+        trade_link_df = trade_execution_df if not trade_execution_df.empty else _pair_trade_links_from_agent_round(agent_round_df)
+
+        self._update_microstructure_round_selector(market_history_df, trade_link_df)
+        self._update_microstructure_summary(market_history_df, trade_link_df, not trade_execution_df.empty)
+        self._update_lob_snapshot_plot(agent_round_df, market_history_df)
+        self._update_candlestick_plot(market_summary_df, market_history_df)
+        self._update_trade_network_plot(trade_link_df, population_df, market_history_df)
+        self._update_market_pressure_plot(market_history_df)
+        self._update_market_activity_plot(market_history_df)
+
+    def _update_microstructure_round_selector(self, market_history_df, trade_link_df):
+        round_values = []
+        if not market_history_df.empty and "round_number" in market_history_df.columns:
+            round_values.extend(market_history_df["round_number"].dropna().astype(int).tolist())
+        if not trade_link_df.empty and "round_number" in trade_link_df.columns:
+            round_values.extend(trade_link_df["round_number"].dropna().astype(int).tolist())
+
+        if not round_values:
+            self._microstructure_round = None
+            self.micro_round_slider.setEnabled(False)
+            self.micro_round_slider.setMinimum(0)
+            self.micro_round_slider.setMaximum(0)
+            self.micro_round_slider.setValue(0)
+            self.micro_round_slider_label.setText("Trade network round: unavailable")
+            return
+
+        min_round = int(min(round_values))
+        max_round = int(max(round_values))
+        selected_round = max_round if self._microstructure_round is None else int(self._microstructure_round)
+        selected_round = max(min_round, min(max_round, selected_round))
+
+        self.micro_round_slider.blockSignals(True)
+        self.micro_round_slider.setEnabled(True)
+        self.micro_round_slider.setMinimum(min_round)
+        self.micro_round_slider.setMaximum(max_round)
+        self.micro_round_slider.setValue(selected_round)
+        self.micro_round_slider.blockSignals(False)
+        self._microstructure_round = selected_round
+        self.micro_round_slider_label.setText(
+            f"Trade network round: {selected_round} of {max_round}"
+        )
+
+    def _on_micro_round_changed(self, value):
+        self._microstructure_round = int(value)
+        self.micro_round_slider_label.setText(
+            f"Trade network round: {self._microstructure_round} of {self.micro_round_slider.maximum()}"
+        )
+        if self._last_payload is not None:
+            market_history_df = self._last_payload.get("market_history", pd.DataFrame())
+            agent_round_df = self._last_payload.get("agent_round", pd.DataFrame())
+            population_df = self._last_payload.get("population", pd.DataFrame())
+            trade_execution_df = self._last_payload.get("trade_execution", pd.DataFrame())
+            trade_link_df = trade_execution_df if not trade_execution_df.empty else _pair_trade_links_from_agent_round(agent_round_df)
+            self._update_trade_network_plot(trade_link_df, population_df, market_history_df)
+
+    def _update_microstructure_summary(self, market_history_df, trade_link_df, using_persisted_links):
+        if market_history_df.empty:
+            self.microstructure_summary_label.setText(
+                "No market microstructure data is available for the selected generation."
+            )
+            return
+
+        spreads = (
+            market_history_df["best_ask"].astype(float) - market_history_df["best_bid"].astype(float)
+        )
+        avg_spread = float(spreads.dropna().mean()) if spreads.notna().any() else float("nan")
+        total_volume = float(market_history_df["volume"].sum()) if "volume" in market_history_df.columns else 0.0
+        total_trades = int(market_history_df["n_trades"].sum()) if "n_trades" in market_history_df.columns else 0
+        avg_active = (
+            float(market_history_df["n_active_total"].mean())
+            if "n_active_total" in market_history_df.columns and market_history_df["n_active_total"].notna().any()
+            else float("nan")
+        )
+        network_edges = len(trade_link_df.groupby(["buyer_agent_id", "seller_agent_id"])) if not trade_link_df.empty else 0
+        network_mode = "persisted trade links" if using_persisted_links else "reconstructed trade links"
+        self.microstructure_summary_label.setText(
+            "\n".join(
+                [
+                    f"Rounds loaded: {len(market_history_df)}",
+                    f"Total matched volume: {total_volume:.3f}",
+                    f"Total trade prints: {total_trades}",
+                    f"Average quoted spread: {avg_spread:.4f}" if not np.isnan(avg_spread) else "Average quoted spread: unavailable",
+                    f"Average active traders: {avg_active:.2f}" if not np.isnan(avg_active) else "Average active traders: unavailable",
+                    f"Unique buyer-seller links: {network_edges}",
+                    f"Trade network source: {network_mode}",
+                ]
+            )
+        )
+
+    def _update_lob_snapshot_plot(self, agent_round_df, market_history_df):
+        self.micro_lob_plot.clear()
+        self.micro_lob_plot.addLine(y=0, pen=pg.mkPen((150, 150, 150), width=1))
+        if agent_round_df.empty:
+            self.micro_lob_plot.setTitle(self._format_plot_title(self.micro_lob_title))
+            return
+
+        snapshot_round = int(agent_round_df["round_number"].max())
+        round_df = agent_round_df[agent_round_df["round_number"] == snapshot_round].copy()
+        round_df = round_df.dropna(subset=["limit_price", "order_qty"])
+        if round_df.empty:
+            self.micro_lob_plot.setTitle(
+                self._format_plot_title(f"{self.micro_lob_title} | round {snapshot_round}")
+            )
+            return
+
+        bids = (
+            round_df[round_df["action"] == "buy"]
+            .groupby("limit_price", as_index=False)["order_qty"]
+            .sum()
+            .sort_values("limit_price")
+        )
+        asks = (
+            round_df[round_df["action"] == "sell"]
+            .groupby("limit_price", as_index=False)["order_qty"]
+            .sum()
+            .sort_values("limit_price")
+        )
+        price_points = sorted(set(bids["limit_price"].tolist()) | set(asks["limit_price"].tolist()))
+        if price_points:
+            width = max(0.15, (min(np.diff(price_points)) * 0.8) if len(price_points) > 1 else 0.4)
+        else:
+            width = 0.4
+
+        if not bids.empty:
+            self.micro_lob_plot.addItem(
+                pg.BarGraphItem(
+                    x=bids["limit_price"].astype(float).tolist(),
+                    height=bids["order_qty"].astype(float).tolist(),
+                    width=width,
+                    brush=(30, 144, 255, 180),
+                    pen=pg.mkPen((30, 144, 255), width=1),
+                )
+            )
+        if not asks.empty:
+            self.micro_lob_plot.addItem(
+                pg.BarGraphItem(
+                    x=asks["limit_price"].astype(float).tolist(),
+                    height=(-asks["order_qty"].astype(float)).tolist(),
+                    width=width,
+                    brush=(220, 20, 60, 180),
+                    pen=pg.mkPen((220, 20, 60), width=1),
+                )
+            )
+
+        if not market_history_df.empty:
+            current_round_market = market_history_df[market_history_df["round_number"] == snapshot_round]
+            if not current_round_market.empty:
+                round_row = current_round_market.iloc[0]
+                if pd.notna(round_row.get("p_t")):
+                    self.micro_lob_plot.addLine(
+                        x=float(round_row["p_t"]),
+                        pen=pg.mkPen((255, 255, 255), width=2, style=Qt.DashLine),
+                    )
+
+        self.micro_lob_plot.setTitle(
+            self._format_plot_title(f"{self.micro_lob_title} | round {snapshot_round}")
+        )
+
+    def _update_candlestick_plot(self, market_summary_df, market_history_df):
+        self.micro_candle_plot.clear()
+        if market_history_df.empty:
+            self.micro_candle_plot.setTitle(self._format_plot_title(self.micro_candle_title))
+            return
+
+        merged_df = market_history_df.merge(
+            market_summary_df,
+            on="round_number",
+            how="left",
+            suffixes=("", "_summary"),
+        ).sort_values("round_number")
+        if merged_df.empty:
+            self.micro_candle_plot.setTitle(self._format_plot_title(self.micro_candle_title))
+            return
+
+        previous_close = None
+        for _, row in merged_df.iterrows():
+            round_number = float(row["round_number"])
+            close_price = (
+                float(row["p_t"])
+                if pd.notna(row.get("p_t"))
+                else float(row.get("fundamental_price", 0.0))
+            )
+            open_price = close_price if previous_close is None else previous_close
+            high_candidates = [
+                value for value in [
+                    row.get("max_sell"),
+                    row.get("best_ask"),
+                    open_price,
+                    close_price,
+                ] if pd.notna(value)
+            ]
+            low_candidates = [
+                value for value in [
+                    row.get("min_bid"),
+                    row.get("best_bid"),
+                    open_price,
+                    close_price,
+                ] if pd.notna(value)
+            ]
+            high_price = float(max(high_candidates)) if high_candidates else close_price
+            low_price = float(min(low_candidates)) if low_candidates else close_price
+            candle_color = (46, 139, 87) if close_price >= open_price else (220, 20, 60)
+            self.micro_candle_plot.plot(
+                x=[round_number, round_number],
+                y=[low_price, high_price],
+                pen=pg.mkPen(candle_color, width=1),
+            )
+            self.micro_candle_plot.plot(
+                x=[round_number, round_number],
+                y=[open_price, close_price],
+                pen=pg.mkPen(candle_color, width=6),
+            )
+            previous_close = close_price
+
+    def _update_trade_network_plot(self, trade_link_df, population_df, market_history_df):
+        self.micro_network_plot.clear()
+        if population_df.empty:
+            self.micro_network_plot.setTitle(self._format_plot_title(self.micro_network_title))
+            return
+
+        population_df = population_df.sort_values("agent_id").reset_index(drop=True)
+        agent_ids = population_df["agent_id"].astype(int).tolist()
+        n_agents = len(agent_ids)
+        angles = np.linspace(0, 2 * np.pi, num=n_agents, endpoint=False)
+        radius = 10.0
+        positions = {
+            agent_id: (float(radius * np.cos(angle)), float(radius * np.sin(angle)))
+            for agent_id, angle in zip(agent_ids, angles)
+        }
+        strategy_by_agent = {
+            int(row["agent_id"]): str(row["strategy_type"])
+            for _, row in population_df.iterrows()
+        }
+
+        snapshot_round = None
+        if self._microstructure_round is not None:
+            snapshot_round = int(self._microstructure_round)
+        elif not market_history_df.empty and "round_number" in market_history_df.columns:
+            snapshot_round = int(market_history_df["round_number"].max())
+        elif not trade_link_df.empty and "round_number" in trade_link_df.columns:
+            snapshot_round = int(trade_link_df["round_number"].max())
+
+        if snapshot_round is not None and "round_number" in trade_link_df.columns:
+            trade_link_df = trade_link_df[trade_link_df["round_number"] == snapshot_round].copy()
+
+        buyer_agents = set()
+        seller_agents = set()
+        if not trade_link_df.empty:
+            edge_df = (
+                trade_link_df.groupby(["buyer_agent_id", "seller_agent_id"], as_index=False)["notional"]
+                .sum()
+                .sort_values("notional", ascending=False)
+            )
+            max_notional = float(edge_df["notional"].max()) if not edge_df.empty else 1.0
+            for _, edge in edge_df.iterrows():
+                buyer = int(edge["buyer_agent_id"])
+                seller = int(edge["seller_agent_id"])
+                buyer_agents.add(buyer)
+                seller_agents.add(seller)
+                if buyer not in positions or seller not in positions:
+                    continue
+                width = 1 + 5 * (float(edge["notional"]) / max_notional if max_notional > 0 else 0.0)
+                x1, y1 = positions[buyer]
+                x2, y2 = positions[seller]
+                mid_x = (x1 + x2) / 2.0
+                mid_y = (y1 + y2) / 2.0
+                dx = x2 - x1
+                dy = y2 - y1
+                self.micro_network_plot.plot(
+                    x=[x1, mid_x],
+                    y=[y1, mid_y],
+                    pen=pg.mkPen((46, 139, 87, 180), width=width),
+                )
+                self.micro_network_plot.plot(
+                    x=[mid_x, x2],
+                    y=[mid_y, y2],
+                    pen=pg.mkPen((220, 20, 60, 180), width=width),
+                )
+                arrow = pg.ArrowItem(
+                    pos=(x2, y2),
+                    angle=float(np.degrees(np.arctan2(dy, dx))),
+                    headLen=14,
+                    tipAngle=28,
+                    baseAngle=20,
+                    brush=(220, 20, 60),
+                    pen=pg.mkPen((220, 20, 60), width=1),
+                )
+                self.micro_network_plot.addItem(arrow)
+
+        scatter = pg.ScatterPlotItem(size=16)
+        scatter_points = []
+        for agent_id in agent_ids:
+            strategy_type = strategy_by_agent.get(agent_id, "unknown")
+            x_pos, y_pos = positions[agent_id]
+            color = STRATEGY_COLORS.get(strategy_type, (180, 180, 180))
+            if agent_id in buyer_agents:
+                outline_color = (46, 139, 87)
+                outline_width = 3
+            elif agent_id in seller_agents:
+                outline_color = (220, 20, 60)
+                outline_width = 3
+            else:
+                outline_color = (255, 255, 255)
+                outline_width = 1
+            scatter_points.append(
+                {
+                    "pos": (x_pos, y_pos),
+                    "brush": pg.mkBrush(color),
+                    "pen": pg.mkPen(outline_color, width=outline_width),
+                }
+            )
+            label = pg.TextItem(
+                text=str(agent_id),
+                color=GRAPH_FOREGROUND,
+                anchor=(0.5, -0.4),
+            )
+            label.setPos(x_pos, y_pos)
+            self.micro_network_plot.addItem(label)
+        scatter.setData(spots=scatter_points)
+        self.micro_network_plot.addItem(scatter)
+        legend_y = radius + 4.0
+        buy_label = pg.TextItem(text="Buyer outline", color=(46, 139, 87), anchor=(0, 0))
+        buy_label.setPos(-radius, legend_y)
+        self.micro_network_plot.addItem(buy_label)
+        sell_label = pg.TextItem(text="Seller outline", color=(220, 20, 60), anchor=(0, 0))
+        sell_label.setPos(-radius, legend_y + 1.6)
+        self.micro_network_plot.addItem(sell_label)
+        flow_label = pg.TextItem(text="Green line to red line + red arrow: buyer -> seller", color=GRAPH_FOREGROUND, anchor=(0, 0))
+        flow_label.setPos(-radius, legend_y + 3.2)
+        self.micro_network_plot.addItem(flow_label)
+        self.micro_network_plot.enableAutoRange()
+        if snapshot_round is not None:
+            self.micro_network_plot.setTitle(
+                self._format_plot_title(f"{self.micro_network_title} | round {snapshot_round}")
+            )
+        else:
+            self.micro_network_plot.setTitle(self._format_plot_title(self.micro_network_title))
+
+    def _update_market_pressure_plot(self, market_history_df):
+        self.micro_pressure_plot.clear()
+        if market_history_df.empty:
+            self.micro_pressure_plot.setTitle(self._format_plot_title(self.micro_pressure_title))
+            return
+
+        x = market_history_df["round_number"].astype(float).tolist()
+        if {"demand_at_p", "supply_at_p"}.issubset(market_history_df.columns):
+            total_flow = market_history_df["demand_at_p"].astype(float) + market_history_df["supply_at_p"].astype(float)
+            imbalance = np.where(
+                total_flow.abs() > 1e-12,
+                (market_history_df["demand_at_p"].astype(float) - market_history_df["supply_at_p"].astype(float)) / total_flow,
+                0.0,
+            )
+            self.micro_pressure_plot.plot(
+                x=x,
+                y=self._smooth_series(imbalance.tolist()),
+                pen=pg.mkPen((255, 140, 0), width=3),
+            )
+        if {"best_bid", "best_ask"}.issubset(market_history_df.columns):
+            spread = (
+                market_history_df["best_ask"].astype(float) - market_history_df["best_bid"].astype(float)
+            ).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+            self.micro_pressure_plot.plot(
+                x=x,
+                y=self._smooth_series(spread.tolist()),
+                pen=pg.mkPen((30, 144, 255), width=3),
+            )
+
+    def _update_market_activity_plot(self, market_history_df):
+        self.micro_activity_plot.clear()
+        if market_history_df.empty:
+            self.micro_activity_plot.setTitle(self._format_plot_title(self.micro_activity_title))
+            return
+
+        x = market_history_df["round_number"].astype(float).tolist()
+        if "volume" in market_history_df.columns:
+            self.micro_activity_plot.plot(
+                x=x,
+                y=self._smooth_series(market_history_df["volume"].astype(float).tolist()),
+                pen=pg.mkPen((46, 139, 87), width=3),
+            )
+        if "n_trades" in market_history_df.columns:
+            self.micro_activity_plot.plot(
+                x=x,
+                y=self._smooth_series(market_history_df["n_trades"].astype(float).tolist()),
+                pen=pg.mkPen((220, 20, 60), width=3),
+            )
+        if "n_active_total" in market_history_df.columns:
+            self.micro_activity_plot.plot(
+                x=x,
+                y=self._smooth_series(market_history_df["n_active_total"].astype(float).tolist()),
+                pen=pg.mkPen((218, 165, 32), width=3),
+            )
+
     def _clear_comparison_plots(self):
         for metric_key, plot in self.comparison_param_plots.items():
             plot.clear()
-            if plot.legend is not None and plot.legend.scene() is not None:
-                plot.legend.scene().removeItem(plot.legend)
-            plot.legend = None
-            plot.addLegend(offset=(10, 10))
             plot.setTitle(self._format_plot_title(self.comparison_plot_titles[metric_key]))
+            plot.setLabel("bottom", "Generation")
         for metric_key, plot in self.comparison_wealth_plots.items():
             plot.clear()
-            if plot.legend is not None and plot.legend.scene() is not None:
-                plot.legend.scene().removeItem(plot.legend)
-            plot.legend = None
-            plot.addLegend(offset=(10, 10))
             plot.addLine(y=0, pen=pg.mkPen((255, 255, 255, 100), width=1, style=Qt.DashLine))
             plot.setTitle(self._format_plot_title(self.comparison_plot_titles[metric_key]))
+            plot.setLabel("bottom", "Generation")
+        self.comparison_param_runs_label.setText("No runs selected.")
+        self.comparison_wealth_runs_label.setText("No runs selected.")
 
     def _update_comparison_summary(self, experiments_df, comparison_df):
         if experiments_df.empty:
@@ -2589,6 +3487,7 @@ class CommandCenter(QMainWindow):
             str(row["experiment_id"]): f"{row['experiment_name']} | {str(row['experiment_id'])[:8]}"
             for _, row in experiments_df.iterrows()
         }
+        legend_items = []
 
         for run_idx, (experiment_id, run_df) in enumerate(
             comparison_df.groupby("experiment_id", sort=False)
@@ -2599,6 +3498,7 @@ class CommandCenter(QMainWindow):
             run_df = run_df.sort_values("generation_id")
             x = run_df["generation_id"].tolist()
             label = labels_by_id.get(str(experiment_id), str(experiment_id))
+            legend_items.append((label, color))
 
             for metric_key, _ in COMPARISON_PARAM_SPECS:
                 if metric_key not in run_df.columns:
@@ -2638,6 +3538,10 @@ class CommandCenter(QMainWindow):
                     name=label,
                     connect="finite",
                 )
+
+        labels_html = _format_run_label_html(legend_items)
+        self.comparison_param_runs_label.setText(labels_html)
+        self.comparison_wealth_runs_label.setText(labels_html)
 
 
 if __name__ == "__main__":
