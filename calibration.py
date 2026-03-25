@@ -25,6 +25,7 @@ import sys
 import warnings
 from datetime import datetime
 from pathlib import Path
+import concurrent.futures
 
 import numpy as np
 import pandas as pd
@@ -81,12 +82,8 @@ def _header(text):
 
 
 def _run_short(label, overrides):
-    """Run a short calibration experiment and return generation_counts_df."""
-    print(f"  {label} ...", end="", flush=True)
-    db = CAL_DB_PATH
     result = run_experiment(
         config_overrides={
-            "db_path":           db,
             "experiment_name":   f"cal_{label}",
             "experiment_type":   "calibration",
             "run_notes":         "",
@@ -102,13 +99,8 @@ def _run_short(label, overrides):
             **overrides,
         },
         run_analysis=False,
+        disable_db_writes=True, # <--- Bypasses all disk I/O
     )
-    if os.path.exists(db):
-        try:
-            os.remove(db)
-        except Exception:
-            pass
-    print(" done")
     return result["generation_counts_df"]
 
 
@@ -200,6 +192,21 @@ def run_option2():
 #  OPTION 3: GRID SEARCH CALIBRATION
 # =============================================================================
 
+def _worker_option3(args):
+    """Worker function for parallel grid search."""
+    n_zi, ip_high = args
+    n_inf = 100 - n_zi
+    
+    df = _run_short(
+        f"nzi{n_zi}_ip{ip_high}",
+        {"n_zi_agents":            n_zi,
+         "n_parameterised_agents": n_inf,
+         "distribution_data":      {"low": 0.0, "high": ip_high}},
+    )
+    
+    m = _metrics(df)
+    return n_zi, ip_high, n_inf, m
+
 def run_option3():
     _header("OPTION 3: Grid Search Calibration")
     print(f"""
@@ -212,28 +219,26 @@ def run_option3():
     2. No-clear rate < 10%
     """)
 
-    total = len(GRID_N_ZI) * len(GRID_IP_HIGH)
+    grid_configs = list(itertools.product(GRID_N_ZI, GRID_IP_HIGH))
+    total = len(grid_configs)
     rows  = []
-    idx   = 0
+    
+    print(f" Launching {total} calibration runs in parallel...")
 
-    for n_zi, ip_high in itertools.product(GRID_N_ZI, GRID_IP_HIGH):
-        idx      += 1
-        n_inf     = 100 - n_zi
+    # 2. Run them in parallel
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        # .map() keeps the results in the exact order we submitted them
+        results = list(executor.map(_worker_option3, grid_configs))
+
+    # 3. Process the results (now that they are all done)
+    for idx, (n_zi, ip_high, n_inf, m) in enumerate(results, 1):
         baseline  = (n_zi == 65 and abs(ip_high - 2.0) < 1e-6)
-
-        print(f"  [{idx:2d}/{total}]  n_zi={n_zi}  ip_high={ip_high:.2f}", end="  ")
-        df = _run_short(
-            f"nzi{n_zi}_ip{ip_high}",
-            {"n_zi_agents":            n_zi,
-             "n_parameterised_agents": n_inf,
-             "distribution_data":      {"low": 0.0, "high": ip_high}},
-        )
-        m       = _metrics(df)
         prem_ok = m["premium"] > TARGET_MIN_WEALTH_PREMIUM
         ncr_ok  = m["ncr"]     < TARGET_MAX_NO_CLEAR_RATE
         valid   = prem_ok and ncr_ok
 
-        print(f"  premium={m['premium']:+.1f}%  ncr={m['ncr']:.3f}  "
+        print(f"  [{idx:2d}/{total}]  n_zi={n_zi}  ip_high={ip_high:.2f}  "
+              f"  premium={m['premium']:+.1f}%  ncr={m['ncr']:.3f}  "
               f"{'VALID' if valid else '    -'}"
               f"{'  <-- BASELINE' if baseline else ''}")
 
