@@ -4,7 +4,6 @@ live generation monitoring, database browsing, and multi-experiment comparison.
 """
 
 import sys
-from ast import literal_eval
 from pathlib import Path
 
 import duckdb
@@ -17,7 +16,6 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QComboBox,
-    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -47,6 +45,50 @@ DEFAULT_DB_PATH = "experiment_results.duckdb"
 SQL_TAB_PREVIEW_ROWS = 1000
 GRAPH_BACKGROUND = "#2b2b2b"
 GRAPH_FOREGROUND = "#ffffff"
+APP_THEMES = {
+    "dark": {
+        "window_bg": "#171b21",
+        "surface_bg": "#1f252d",
+        "surface_alt_bg": "#262d37",
+        "input_bg": "#11161c",
+        "border": "#3b4654",
+        "text": "#f3f5f7",
+        "muted_text": "#b8c2cf",
+        "selection_bg": "#2b6cb0",
+        "selection_text": "#ffffff",
+        "plot_background": "#2b2b2b",
+        "plot_foreground": "#ffffff",
+        "plot_reference": (255, 255, 255, 100),
+        "plot_outline": (255, 255, 255),
+        "plot_mid_price": (255, 255, 255),
+        "refresh_button": "#2e8b57",
+        "start_button": "#1f5fa5",
+        "batch_button": "#7b4bb7",
+        "stop_button": "#a52a2a",
+        "compare_button": "#6a5acd",
+    },
+    "light": {
+        "window_bg": "#f3f5f8",
+        "surface_bg": "#ffffff",
+        "surface_alt_bg": "#e9eef5",
+        "input_bg": "#ffffff",
+        "border": "#c3cfdb",
+        "text": "#17212b",
+        "muted_text": "#4a5563",
+        "selection_bg": "#2b6cb0",
+        "selection_text": "#ffffff",
+        "plot_background": "#ffffff",
+        "plot_foreground": "#17212b",
+        "plot_reference": (23, 33, 43, 110),
+        "plot_outline": (23, 33, 43),
+        "plot_mid_price": (23, 33, 43),
+        "refresh_button": "#2f855a",
+        "start_button": "#2b6cb0",
+        "batch_button": "#805ad5",
+        "stop_button": "#c53030",
+        "compare_button": "#5a67d8",
+    },
+}
 STRATEGY_COLORS = {
     "zi": (255, 140, 0),
     "parameterised_informed": (30, 144, 255),
@@ -55,6 +97,56 @@ COMPARISON_WEALTH_DIFF_SPEC = (
     "wealth_difference",
     "Informed Wealth - ZI Wealth",
 )
+PLOT_MATH_NOTES = {
+    "Mean Strategy Parameters Across Generations": "q<sub>g</sub>, s<sub>g</sub>",
+    "Mean Wealth by Strategy": "W&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>i</sub>[cash + inv p<sub>T</sub>]",
+    "Mean Info_Param by Strategy": "&theta;&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>i</sub>[&theta;<sub>i</sub>]",
+    "Market Summary by Round": "bid/ask extrema, F<sub>t</sub>, mid<sub>t</sub>",
+    "Average Profit per Round: ZI vs Parameterised": "&pi;&#772;<sub>t</sub><sup>(s)</sup> = avg<sub>i</sub> [&Delta;W<sub>i,t</sub>]",
+    "Average Agent Volume Share per Round": "v&#772;<sub>t</sub><sup>(s)</sup> = avg<sub>i</sub>[q<sub>i,t</sub>/V<sub>t</sub>]",
+    "Qty Aggression": "q&#772;<sub>g</sub> = avg<sub>i</sub>[q<sub>i</sub>]",
+    "Signal Aggression": "s&#772;<sub>g</sub> = avg<sub>i</sub>[s<sub>i</sub>]",
+    "Info Param (informed)": "&theta;&#772;<sub>g</sub><sup>I</sup> = avg<sub>i</sub>[&theta;<sub>i</sub> | I]",
+    "Mean Info Param (informed)": "&theta;&#772;<sub>g</sub><sup>I</sup> = avg<sub>i</sub>[&theta;<sub>i</sub> | I]",
+    "Qty Aggression Std Dev": "&sigma;<sub>q,g</sub> = std<sub>i</sub>[q<sub>i</sub>]",
+    "Signal Aggression Std Dev": "&sigma;<sub>s,g</sub> = std<sub>i</sub>[s<sub>i</sub>]",
+    "Info Param Std Dev": "&sigma;<sub>&theta;,g</sub> = std<sub>i</sub>[&theta;<sub>i</sub> | I]",
+    "Informed Wealth - ZI Wealth": "&Delta;W<sub>g</sub> = W&#772;<sub>g</sub><sup>I</sup> - W&#772;<sub>g</sub><sup>ZI</sup>",
+    "Limit Order Book Snapshot": "Q<sub>t</sub>(p) = queued qty at price p",
+    "Candlestick View": "(O<sub>t</sub>, H<sub>t</sub>, L<sub>t</sub>, C<sub>t</sub>)",
+    "Trade Network": "E<sub>t</sub>(i,j) = notional flow",
+    "Order Imbalance and Spread": "I<sub>t</sub> = (D<sub>t</sub> - S<sub>t</sub>)/(D<sub>t</sub> + S<sub>t</sub>)",
+    "Participation and Volume": "V<sub>t</sub>, N<sub>trades,t</sub>, N<sub>active,t</sub>",
+    "Profit Change vs Prev Gen": "&Delta;&pi;<sub>g</sub><sup>(s)</sup> = &pi;<sub>g</sub><sup>(s)</sup> - &pi;<sub>g-1</sub><sup>(s)</sup>",
+    "Info_Param per Agent": "&theta;<sub>i,g</sub>",
+    "Qty_Aggression per Agent": "q<sub>i,g</sub>",
+    "Signal_Aggression per Agent": "s<sub>i,g</sub>",
+}
+PLOT_BRIEF_NOTES = {
+    "Mean Strategy Parameters Across Generations": "Shows how the learned strategy aggressiveness parameters evolve generation by generation.",
+    "Mean Wealth by Strategy": "Compares average end-of-generation wealth for informed and zero-intelligence traders.",
+    "Mean Info_Param by Strategy": "Tracks the average information parameter carried by each strategy group across generations.",
+    "Market Summary by Round": "Summarises how bids, asks, the fundamental value, and the mid price move through a generation.",
+    "Average Profit per Round: ZI vs Parameterised": "Shows round-by-round average profit so you can compare trading performance within a generation.",
+    "Average Agent Volume Share per Round": "Measures how much of each round's executed volume is supplied by each strategy group.",
+    "Qty Aggression": "Shows the cross-run mean quantity aggressiveness over generations.",
+    "Signal Aggression": "Shows the cross-run mean signal aggressiveness over generations.",
+    "Info Param (informed)": "Shows how the informed traders' average information parameter changes over generations.",
+    "Mean Info Param (informed)": "Shows how the informed traders' average information parameter changes over generations.",
+    "Qty Aggression Std Dev": "Shows how dispersed quantity aggressiveness is within the informed population.",
+    "Signal Aggression Std Dev": "Shows how dispersed signal aggressiveness is within the informed population.",
+    "Info Param Std Dev": "Shows how spread out informed traders are in their information parameter values.",
+    "Informed Wealth - ZI Wealth": "Positive values mean informed traders outperform ZI traders on average; negative values mean the reverse.",
+    "Limit Order Book Snapshot": "Displays queued demand and supply at each price for the selected round.",
+    "Candlestick View": "Shows a compact open-high-low-close style summary of market prices by round.",
+    "Trade Network": "Maps who traded with whom, with edge thickness reflecting notional flow.",
+    "Order Imbalance and Spread": "Compares buy-sell pressure with the prevailing quoted spread over time.",
+    "Participation and Volume": "Shows how trading activity changes through the generation using volume, trades, and active participants.",
+    "Profit Change vs Prev Gen": "Shows whether each strategy's generation-level profit is improving or deteriorating versus the previous generation.",
+    "Info_Param per Agent": "Tracks each informed agent's information parameter across generations.",
+    "Qty_Aggression per Agent": "Tracks each informed agent's quantity aggressiveness across generations.",
+    "Signal_Aggression per Agent": "Tracks each informed agent's signal aggressiveness across generations.",
+}
 COMPARISON_LINE_COLORS = [
     (255, 140, 0),
     (30, 144, 255),
@@ -65,21 +157,59 @@ COMPARISON_LINE_COLORS = [
     (0, 206, 209),
     (205, 92, 92),
 ]
-BATCH_CONFIG_ALIASES = {
-    "name": "experiment_name",
-    "type": "experiment_type",
-    "notes": "run_notes",
-    "seed": "experiment_seed",
-    "generations": "n_generations",
-    "rounds": "n_rounds",
-    "zi_agents": "n_zi_agents",
-    "informed_agents": "n_parameterised_agents",
-    "cash": "total_initial_cash",
-    "shares": "total_initial_shares",
-    "s0": "GBM_S0",
-    "volatility": "GBM_volatility",
-    "drift": "GBM_drift",
-    "mutation_rate": "algorithm_params.mutation_rate",
+SWEEP_COMPARISON_OUTPUT_DIR = Path("comparison_outputs")
+SWEEP_PARAM_SUBPLOTS = [
+    ("mean_qty_aggression", "Qty Aggression"),
+    ("mean_signal_aggression", "Signal Aggression"),
+    ("mean_info_param_parameterised_informed", "Info Param (informed)"),
+]
+SWEEP_STD_SUBPLOTS = [
+    ("std_qty_aggression", "Qty Aggression Std Dev"),
+    ("std_signal_aggression", "Signal Aggression Std Dev"),
+    ("std_info_param_parameterised_informed", "Info Param Std Dev"),
+]
+SWEEP_COLOR_STOPS = [
+    (68, 1, 84),
+    (71, 44, 122),
+    (59, 81, 139),
+    (44, 113, 142),
+    (33, 144, 141),
+    (39, 173, 129),
+    (92, 200, 99),
+    (170, 220, 50),
+    (253, 231, 37),
+]
+SWEEP_DEFAULTS = {
+    "population": {
+        "total_agents": 100,
+        "n_generations": 100,
+        "n_rounds": 50,
+        "fixed_drift": 0.02,
+        "fixed_volatility": 0.10,
+        "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20",
+        "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20",
+        "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50",
+    },
+    "drift": {
+        "total_agents": 100,
+        "n_generations": 100,
+        "n_rounds": 50,
+        "fixed_drift": 0.02,
+        "fixed_volatility": 0.10,
+        "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20",
+        "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20",
+        "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50",
+    },
+    "volatility": {
+        "total_agents": 100,
+        "n_generations": 100,
+        "n_rounds": 50,
+        "fixed_drift": 0.02,
+        "fixed_volatility": 0.10,
+        "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20",
+        "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20",
+        "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50",
+    },
 }
 
 
@@ -99,10 +229,30 @@ def _style_plot(plot):
     plot.showGrid(x=True, y=True, alpha=0.25)
     plot.getAxis("left").enableAutoSIPrefix(False)
     plot.getAxis("bottom").enableAutoSIPrefix(False)
+    plot.getAxis("bottom").setStyle(tickTextOffset=6, autoExpandTextSpace=True)
 
 
-def _set_plot_bottom_label(plot, x_label: str, legend_items=None):
-    label_html = f"<span style='color: {GRAPH_FOREGROUND};'>{x_label}</span>"
+def _resolve_plot_math_note(base_title: str) -> str:
+    return PLOT_MATH_NOTES.get(base_title, "y = f(x)")
+
+
+def _resolve_plot_brief_note(base_title: str, bottom_text: str | None = None, left_text: str | None = None) -> str:
+    if base_title in PLOT_BRIEF_NOTES:
+        return PLOT_BRIEF_NOTES[base_title]
+    if bottom_text and left_text:
+        return f"Shows how {left_text.lower()} changes with {bottom_text.lower()}."
+    if left_text:
+        return f"Shows how {left_text.lower()} evolves over the selected index."
+    return "Shows the plotted series over the selected index."
+
+
+def _set_plot_bottom_label(
+    plot,
+    x_label: str,
+    legend_items=None,
+    text_color: str = GRAPH_FOREGROUND,
+):
+    label_html = f"<span style='color: {text_color};'>{x_label}</span>"
     if legend_items:
         legend_html = "<br>".join(
             f"<span style='color: rgb({color[0]}, {color[1]}, {color[2]});'>&#9632; {name}</span>"
@@ -110,11 +260,12 @@ def _set_plot_bottom_label(plot, x_label: str, legend_items=None):
         )
         label_html += f"<br><span style='font-size: 9pt;'>{legend_html}</span>"
     plot.setLabel("bottom", label_html)
+    plot.getAxis("bottom").setHeight(54 if legend_items else 34)
 
 
-def _format_run_label_html(legend_items):
+def _format_run_label_html(legend_items, text_color: str = GRAPH_FOREGROUND):
     if not legend_items:
-        return f"<span style='color: {GRAPH_FOREGROUND};'>No runs selected.</span>"
+        return f"<span style='color: {text_color};'>No runs selected.</span>"
     return "<br>".join(
         f"<span style='color: rgb({color[0]}, {color[1]}, {color[2]});'>&#9632; {name}</span>"
         for name, color in legend_items
@@ -191,76 +342,223 @@ def _pair_trade_links_from_agent_round(agent_round_df: pd.DataFrame) -> pd.DataF
     return pd.DataFrame(records)
 
 
-def _parse_batch_value(raw_value: str):
-    value = raw_value.strip()
-    lowered = value.lower()
-    if lowered in {"true", "false"}:
-        return lowered == "true"
-    try:
-        return literal_eval(value)
-    except Exception:
-        return value
+def _ensure_database_exists(db_path: str) -> bool:
+    db_file = Path(db_path)
+    database_created = not db_file.exists()
+    create_database(str(db_file))
+    return database_created
 
 
-def _set_nested_config_value(config: dict, key_path: str, value):
-    path_parts = key_path.split(".")
-    target = config
-    for part in path_parts[:-1]:
-        if part not in target or not isinstance(target[part], dict):
-            target[part] = {}
-        else:
-            target[part] = dict(target[part])
-        target = target[part]
-    target[path_parts[-1]] = value
+def _parse_float_list(raw_values: str) -> list[float]:
+    values = []
+    for part in raw_values.split(","):
+        value = part.strip()
+        if not value:
+            continue
+        values.append(float(value))
+    if not values:
+        raise ValueError("Please provide at least one numeric sweep value.")
+    return values
 
 
-def _load_batch_run_configs(file_path: str, default_db_path: str) -> list[dict]:
-    path = Path(file_path)
-    if not path.exists():
-        raise FileNotFoundError(f"Batch parameter file not found: {path}")
+def _parse_population_sweep(raw_values: str, total_agents: int) -> list[tuple[int, int]]:
+    pairs = []
+    for part in raw_values.split(","):
+        value = part.strip()
+        if not value:
+            continue
+        if ":" not in value:
+            raise ValueError(
+                "Population sweep values must use informed:zi pairs, for example 40:60,50:50."
+            )
+        informed_raw, zi_raw = [piece.strip() for piece in value.split(":", 1)]
+        informed = int(informed_raw)
+        zi = int(zi_raw)
+        if informed + zi != total_agents:
+            raise ValueError(
+                f"Population sweep pair {informed}:{zi} does not sum to total agents ({total_agents})."
+            )
+        pairs.append((informed, zi))
+    if not pairs:
+        raise ValueError("Please provide at least one informed:zi population pair.")
+    return pairs
 
-    configs = []
-    current_block = {}
-    with path.open("r", encoding="utf-8") as handle:
-        for line_number, raw_line in enumerate(handle, start=1):
-            line = raw_line.strip()
-            if not line or line == "---":
-                if current_block:
-                    configs.append(current_block)
-                    current_block = {}
-                continue
-            if line.startswith("#"):
-                continue
-            if "=" not in line:
-                raise ValueError(
-                    f"Invalid batch file format on line {line_number}: expected key=value."
+
+def _interpolate_color(start_color, end_color, ratio: float):
+    return tuple(
+        int(round(start + (end - start) * ratio))
+        for start, end in zip(start_color, end_color)
+    )
+
+
+def _sweep_colors(n_runs: int) -> list[tuple[int, int, int]]:
+    if n_runs <= 0:
+        return []
+    if n_runs == 1:
+        return [SWEEP_COLOR_STOPS[len(SWEEP_COLOR_STOPS) // 2]]
+
+    colors = []
+    last_index = len(SWEEP_COLOR_STOPS) - 1
+    for idx in range(n_runs):
+        scaled = (idx / (n_runs - 1)) * last_index
+        low_index = int(np.floor(scaled))
+        high_index = min(low_index + 1, last_index)
+        ratio = scaled - low_index
+        colors.append(
+            _interpolate_color(
+                SWEEP_COLOR_STOPS[low_index],
+                SWEEP_COLOR_STOPS[high_index],
+                ratio,
+            )
+        )
+    return colors
+
+
+def _build_sweep_title(sweep_name: str, settings: dict) -> str:
+    total_agents = int(settings["total_agents"])
+    fixed_drift = float(settings["fixed_drift"])
+    fixed_volatility = float(settings["fixed_volatility"])
+    default_informed = total_agents // 2
+    default_zi = total_agents - default_informed
+
+    if sweep_name == "population":
+        return (
+            f"Population Sweep (drift={fixed_drift:.2f}, vol={fixed_volatility:.2f}, "
+            f"total={total_agents})"
+        )
+    if sweep_name == "drift":
+        return (
+            f"GBM Drift Sweep (vol={fixed_volatility:.2f}, "
+            f"{default_informed} parametrised, {default_zi} ZI)"
+        )
+    return (
+        f"GBM Volatility Sweep (drift={fixed_drift:.2f}, "
+        f"{default_informed} parametrised, {default_zi} ZI)"
+    )
+
+
+def _build_sweep_run_args(sweep_name: str, settings: dict) -> tuple[str, list[tuple[str, dict]]]:
+    total_agents = int(settings["total_agents"])
+    n_generations = int(settings["n_generations"])
+    n_rounds = int(settings["n_rounds"])
+    fixed_drift = float(settings["fixed_drift"])
+    fixed_volatility = float(settings["fixed_volatility"])
+    title = _build_sweep_title(sweep_name, settings)
+
+    run_args = []
+    if sweep_name == "population":
+        for n_informed, n_zi in _parse_population_sweep(settings["population_values"], total_agents):
+            label = f"{n_informed} parametrised, {n_zi} ZI"
+            run_args.append(
+                (
+                    label,
+                    {
+                        "n_parameterised_agents": n_informed,
+                        "n_zi_agents": n_zi,
+                        "n_generations": n_generations,
+                        "n_rounds": n_rounds,
+                        "GBM_drift": fixed_drift,
+                        "GBM_volatility": fixed_volatility,
+                    },
                 )
-            key, value = [part.strip() for part in line.split("=", 1)]
-            if not key:
-                raise ValueError(f"Invalid batch file format on line {line_number}: missing key.")
-            current_block[key] = _parse_batch_value(value)
+            )
+    elif sweep_name == "drift":
+        default_informed = total_agents // 2
+        default_zi = total_agents - default_informed
+        for drift in _parse_float_list(settings["drift_values"]):
+            label = f"Drift {drift:.2f}"
+            run_args.append(
+                (
+                    label,
+                    {
+                        "n_parameterised_agents": default_informed,
+                        "n_zi_agents": default_zi,
+                        "n_generations": n_generations,
+                        "n_rounds": n_rounds,
+                        "GBM_drift": drift,
+                        "GBM_volatility": fixed_volatility,
+                    },
+                )
+            )
+    elif sweep_name == "volatility":
+        default_informed = total_agents // 2
+        default_zi = total_agents - default_informed
+        for volatility in _parse_float_list(settings["volatility_values"]):
+            label = f"Vol {volatility:.2f}"
+            run_args.append(
+                (
+                    label,
+                    {
+                        "n_parameterised_agents": default_informed,
+                        "n_zi_agents": default_zi,
+                        "n_generations": n_generations,
+                        "n_rounds": n_rounds,
+                        "GBM_drift": fixed_drift,
+                        "GBM_volatility": volatility,
+                    },
+                )
+            )
+    else:
+        raise ValueError(f"Unknown sweep type: {sweep_name}")
 
-    if current_block:
-        configs.append(current_block)
+    if not run_args:
+        raise ValueError("No runs were generated for the selected sweep.")
+    return title, run_args
 
-    if not configs:
-        raise ValueError("No runs were found in the batch parameter file.")
 
-    parsed_configs = []
-    for index, raw_config in enumerate(configs, start=1):
-        config = {
-            "db_path": default_db_path,
-            "algorithm_params": dict(DEFAULT_EXPERIMENT_CONFIG["algorithm_params"]),
-        }
-        for raw_key, value in raw_config.items():
-            normalised_key = BATCH_CONFIG_ALIASES.get(raw_key, raw_key)
-            _set_nested_config_value(config, normalised_key, value)
-        config.setdefault("experiment_name", f"Batch Run {index}")
-        config.setdefault("experiment_type", DEFAULT_EXPERIMENT_CONFIG["experiment_type"])
-        config.setdefault("run_notes", DEFAULT_EXPERIMENT_CONFIG["run_notes"])
-        parsed_configs.append(config)
+def _prepare_sweep_plot_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Trim and normalize sweep data to the columns the comparison plots actually consume."""
+    if df is None or df.empty:
+        return pd.DataFrame()
 
-    return parsed_configs
+    prepared_df = df.copy()
+    if "generation" not in prepared_df.columns and "generation_id" in prepared_df.columns:
+        prepared_df["generation"] = prepared_df["generation_id"].astype(int) - 1
+
+    needed_cols = {"generation", "generation_id", WEALTH_INFORMED_COL, WEALTH_ZI_COL}
+    for metric_key, _ in SWEEP_PARAM_SUBPLOTS:
+        needed_cols.add(metric_key)
+    for metric_key, _ in SWEEP_STD_SUBPLOTS:
+        needed_cols.add(metric_key)
+
+    keep_cols = [col for col in prepared_df.columns if col in needed_cols]
+    if not keep_cols:
+        return pd.DataFrame()
+
+    prepared_df = prepared_df[keep_cols].copy()
+    if "generation" in prepared_df.columns:
+        prepared_df["generation"] = prepared_df["generation"].astype(int)
+    if "generation_id" in prepared_df.columns:
+        prepared_df["generation_id"] = prepared_df["generation_id"].astype(int)
+
+    numeric_cols = [col for col in prepared_df.columns if col not in {"generation", "generation_id"}]
+    for col in numeric_cols:
+        prepared_df[col] = pd.to_numeric(prepared_df[col], errors="coerce")
+
+    sort_cols = ["generation"] if "generation" in prepared_df.columns else ["generation_id"]
+    return prepared_df.sort_values(sort_cols).reset_index(drop=True)
+
+
+def _comparison_payload_to_runs(experiments_df: pd.DataFrame, comparison_df: pd.DataFrame) -> list[dict]:
+    if experiments_df.empty or comparison_df.empty:
+        return []
+
+    labels_by_id = {
+        str(row["experiment_id"]): f"{row['experiment_name']} | {str(row['experiment_id'])[:8]}"
+        for _, row in experiments_df.iterrows()
+    }
+    runs = []
+    for experiment_id, run_df in comparison_df.groupby("experiment_id", sort=False):
+        run_copy = run_df.sort_values("generation_id").reset_index(drop=True).copy()
+        run_copy["generation"] = run_copy["generation_id"].astype(int)
+        runs.append(
+            {
+                "label": labels_by_id.get(str(experiment_id), str(experiment_id)),
+                "experiment_id": str(experiment_id),
+                "data": run_copy,
+            }
+        )
+    return runs
 
 
 class DatabaseLoaderWorker(QThread):
@@ -283,10 +581,7 @@ class DatabaseLoaderWorker(QThread):
 
     def _load_payload(self):
         db_file = Path(self.db_path)
-        if not db_file.exists():
-            raise FileNotFoundError(f"Database file not found: {db_file}")
-
-        create_database(str(db_file))
+        database_created = _ensure_database_exists(str(db_file))
 
         con = duckdb.connect(str(db_file))
         try:
@@ -922,6 +1217,7 @@ class DatabaseLoaderWorker(QThread):
                     }
 
             return {
+                "database_created": database_created,
                 "experiments": experiments_df,
                 "generations": generations_df,
                 "wealth_history": wealth_history_df,
@@ -980,69 +1276,6 @@ class ExperimentRunnerWorker(QThread):
             self.error.emit(str(exc))
 
 
-class BatchExperimentRunnerWorker(QThread):
-    progress = Signal(dict)
-    completed = Signal(dict)
-    error = Signal(str)
-
-    def __init__(self, config_batch):
-        super().__init__()
-        self.config_batch = config_batch
-
-    def run(self):
-        completed_results = []
-        total_runs = len(self.config_batch)
-        try:
-            self.progress.emit(
-                {
-                    "event": "batch_started",
-                    "total_runs": total_runs,
-                }
-            )
-            for run_index, config_overrides in enumerate(self.config_batch, start=1):
-                run_name = str(config_overrides.get("experiment_name", f"Batch Run {run_index}"))
-                self.progress.emit(
-                    {
-                        "event": "batch_run_started",
-                        "run_index": run_index,
-                        "total_runs": total_runs,
-                        "run_name": run_name,
-                    }
-                )
-
-                def batch_progress_callback(payload):
-                    payload = dict(payload)
-                    payload["batch_run_index"] = run_index
-                    payload["batch_total_runs"] = total_runs
-                    payload["batch_run_name"] = run_name
-                    self.progress.emit(payload)
-
-                result = run_experiment(
-                    config_overrides=config_overrides,
-                    progress_callback=batch_progress_callback,
-                    run_analysis=True,
-                )
-                completed_results.append(result)
-                self.progress.emit(
-                    {
-                        "event": "batch_run_completed",
-                        "run_index": run_index,
-                        "total_runs": total_runs,
-                        "run_name": run_name,
-                        "experiment_id": result.get("experiment_id"),
-                    }
-                )
-
-            self.completed.emit(
-                {
-                    "runs": completed_results,
-                    "total_runs": total_runs,
-                }
-            )
-        except Exception as exc:
-            self.error.emit(str(exc))
-
-
 class ComparisonLoaderWorker(QThread):
     """Background thread that fetches generation-level metrics for multiple experiments to populate comparison charts."""
 
@@ -1062,12 +1295,14 @@ class ComparisonLoaderWorker(QThread):
 
     def _load_payload(self):
         db_file = Path(self.db_path)
-        if not db_file.exists():
-            raise FileNotFoundError(f"Database file not found: {db_file}")
+        _ensure_database_exists(str(db_file))
         if not self.experiment_ids:
-            return {"experiments": pd.DataFrame(), "comparison_metrics": pd.DataFrame()}
+            return {
+                "experiments": pd.DataFrame(),
+                "comparison_metrics": pd.DataFrame(),
+                "sql_objects": {},
+            }
 
-        create_database(str(db_file))
         con = duckdb.connect(str(db_file))
         try:
             experiment_ids_sql = ", ".join(f"'{experiment_id}'" for experiment_id in self.experiment_ids)
@@ -1089,7 +1324,11 @@ class ComparisonLoaderWorker(QThread):
             ).fetchdf()
 
             if experiments_df.empty:
-                return {"experiments": experiments_df, "comparison_metrics": pd.DataFrame()}
+                return {
+                    "experiments": experiments_df,
+                    "comparison_metrics": pd.DataFrame(),
+                    "sql_objects": {},
+                }
 
             generations_df = con.execute(
                 f"""
@@ -1156,6 +1395,24 @@ class ComparisonLoaderWorker(QThread):
                 """
             ).fetchdf()
 
+            diversity_df = con.execute(
+                f"""
+                SELECT
+                    experiment_id,
+                    generation_id,
+                    STDDEV_SAMP(qty_aggression) AS std_qty_aggression,
+                    STDDEV_SAMP(signal_aggression) AS std_signal_aggression,
+                    STDDEV_SAMP(CASE
+                        WHEN strategy_type = 'parameterised_informed' THEN info_param
+                        ELSE NULL
+                    END) AS std_info_param_parameterised_informed
+                FROM agent_population
+                WHERE experiment_id IN ({experiment_ids_sql})
+                GROUP BY experiment_id, generation_id
+                ORDER BY experiment_id, generation_id
+                """
+            ).fetchdf()
+
             comparison_df = generations_df.copy()
             if not wealth_history_df.empty:
                 wealth_pivot = (
@@ -1199,17 +1456,198 @@ class ComparisonLoaderWorker(QThread):
                     how="left",
                 )
 
+            if not diversity_df.empty:
+                comparison_df = comparison_df.merge(
+                    diversity_df,
+                    on=["experiment_id", "generation_id"],
+                    how="left",
+                )
+
             if not comparison_df.empty:
                 comparison_df = comparison_df.sort_values(
                     ["experiment_id", "generation_id"]
                 ).reset_index(drop=True)
 
+            sql_objects = {}
+            object_rows = con.execute(
+                """
+                SELECT
+                    table_name,
+                    table_type
+                FROM information_schema.tables
+                WHERE table_schema = 'main'
+                ORDER BY
+                    CASE WHEN table_type = 'BASE TABLE' THEN 0 ELSE 1 END,
+                    table_name
+                """
+            ).fetchall()
+
+            for object_name, object_type in object_rows:
+                try:
+                    column_rows = con.execute(
+                        """
+                        SELECT column_name
+                        FROM information_schema.columns
+                        WHERE table_schema = 'main' AND table_name = ?
+                        ORDER BY ordinal_position
+                        """,
+                        [object_name],
+                    ).fetchall()
+                    ordered_column_names = [str(row[0]) for row in column_rows]
+                    column_name_set = set(ordered_column_names)
+                    where_clauses = []
+                    if "experiment_id" in column_name_set:
+                        where_clauses.append(f"experiment_id IN ({experiment_ids_sql})")
+
+                    base_query = f'SELECT * FROM "{object_name}"'
+                    if where_clauses:
+                        base_query += " WHERE " + " AND ".join(where_clauses)
+                    order_columns = [
+                        column_name
+                        for column_name in ["experiment_id", "generation_id", "round_number", "agent_id", "trade_id"]
+                        if column_name in column_name_set
+                    ]
+                    if order_columns:
+                        base_query += " ORDER BY " + ", ".join(order_columns)
+
+                    total_rows = int(
+                        con.execute(
+                            f"SELECT COUNT(*) FROM ({base_query}) AS filtered_object"
+                        ).fetchone()[0]
+                    )
+                    sql_objects[str(object_name)] = {
+                        "display_name": _humanize_sql_object_name(str(object_name)),
+                        "type": str(object_type),
+                        "row_count": total_rows,
+                        "preview_rows": min(total_rows, SQL_TAB_PREVIEW_ROWS),
+                        "data": con.execute(
+                            f"{base_query} LIMIT {SQL_TAB_PREVIEW_ROWS}"
+                        ).fetchdf(),
+                    }
+                except Exception as exc:
+                    sql_objects[str(object_name)] = {
+                        "display_name": _humanize_sql_object_name(str(object_name)),
+                        "type": str(object_type),
+                        "row_count": 0,
+                        "preview_rows": 0,
+                        "data": pd.DataFrame({"error": [str(exc)]}),
+                    }
+
             return {
                 "experiments": experiments_df,
                 "comparison_metrics": comparison_df,
+                "sql_objects": sql_objects,
             }
         finally:
             con.close()
+
+
+class SweepComparisonWorker(QThread):
+    """Background thread that runs persisted sweep experiments and streams live comparison updates."""
+
+    progress = Signal(dict)
+    completed = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, sweep_name: str, settings: dict):
+        super().__init__()
+        self.sweep_name = sweep_name
+        self.settings = dict(settings)
+
+    def run(self):
+        try:
+            sweep_title, run_args = _build_sweep_run_args(self.sweep_name, self.settings)
+            total_runs = len(run_args)
+            self.progress.emit(
+                {
+                    "event": "sweep_started",
+                    "sweep_name": self.sweep_name,
+                    "sweep_title": sweep_title,
+                    "total_runs": total_runs,
+                }
+            )
+            indexed_results = []
+            for run_index, (label, overrides) in enumerate(run_args, start=1):
+                run_overrides = dict(overrides)
+                run_overrides["db_path"] = str(self.settings["db_path"])
+                run_overrides["experiment_name"] = label
+                run_overrides["experiment_type"] = f"Sweep: {self.sweep_name}"
+                run_overrides["run_notes"] = sweep_title
+
+                live_generation_df = pd.DataFrame()
+                self.progress.emit(
+                    {
+                        "event": "sweep_run_started",
+                        "sweep_name": self.sweep_name,
+                        "sweep_title": sweep_title,
+                        "run_index": run_index,
+                        "total_runs": total_runs,
+                        "run_label": label,
+                    }
+                )
+
+                def sweep_progress_callback(payload):
+                    nonlocal live_generation_df
+                    payload = dict(payload)
+                    payload["sweep_name"] = self.sweep_name
+                    payload["sweep_title"] = sweep_title
+                    payload["run_index"] = run_index
+                    payload["total_runs"] = total_runs
+                    payload["run_label"] = label
+                    if payload.get("event") == "generation_completed":
+                        metrics = payload.get("generation_metrics", {})
+                        if metrics:
+                            live_generation_df = pd.concat(
+                                [live_generation_df, pd.DataFrame([metrics])],
+                                ignore_index=True,
+                            )
+                            live_generation_df = live_generation_df.drop_duplicates(
+                                subset=["generation_id"],
+                                keep="last",
+                            )
+                            payload["live_generation_df"] = _prepare_sweep_plot_dataframe(
+                                live_generation_df
+                            )
+                    self.progress.emit(payload)
+
+                result = run_experiment(
+                    config_overrides=run_overrides,
+                    progress_callback=sweep_progress_callback,
+                    run_analysis=False,
+                )
+                run_df = _prepare_sweep_plot_dataframe(
+                    result["generation_counts_df"].reset_index(drop=True).copy()
+                )
+                indexed_results.append(
+                    {
+                        "label": label,
+                        "experiment_id": result.get("experiment_id"),
+                        "data": run_df,
+                    }
+                )
+                self.progress.emit(
+                    {
+                        "event": "sweep_run_completed",
+                        "sweep_name": self.sweep_name,
+                        "run_label": label,
+                        "run_index": run_index,
+                        "completed_runs": run_index,
+                        "total_runs": total_runs,
+                        "experiment_id": result.get("experiment_id"),
+                        "data": run_df.copy(),
+                    }
+                )
+
+            self.completed.emit(
+                {
+                    "sweep_name": self.sweep_name,
+                    "sweep_title": sweep_title,
+                    "runs": indexed_results,
+                    "settings": self.settings,
+                }
+            )
+        except Exception as exc:
+            self.error.emit(str(exc))
 
 
 class CommandCenter(QMainWindow):
@@ -1220,23 +1658,31 @@ class CommandCenter(QMainWindow):
         self.setWindowTitle("Agent-Based Market Simulation")
         self.resize(1600, 980)
 
+        self._theme_mode = "light"
+        self._theme = APP_THEMES[self._theme_mode]
         self._current_experiment_id = None
         self._current_generation_id = None
         self._microstructure_round = None
         self._suppress_selection_signals = False
         self.worker = None
         self.run_worker = None
-        self.batch_run_worker = None
         self.compare_worker = None
+        self.sweep_compare_worker = None
         self.live_generations_df = pd.DataFrame()
         self.live_strategy_generation_df = pd.DataFrame()
         self.live_strategy_round_df = pd.DataFrame()
         self._pending_generation_id = None
         self._last_payload = None
         self._comparison_payload = None
+        self._comparison_sweep_payload = None
         self._comparison_selected_ids = []
+        self._comparison_legend_items = []
+        self._comparison_sweep_legend_items = []
         self.smoothing_window = 1
         self._pending_smoothing_window = 1
+        self._plot_theme_specs = {}
+        self._plot_canvases = []
+        self._comparison_zero_lines = {}
         self._generation_slider_timer = QTimer(self)
         self._generation_slider_timer.setSingleShot(True)
         self._generation_slider_timer.setInterval(1000)
@@ -1297,8 +1743,204 @@ class CommandCenter(QMainWindow):
         self.smoothing_slider.valueChanged.connect(self._on_smoothing_changed)
         self.checkbox_show_parameterised.toggled.connect(self._refresh_plots_only)
         self.checkbox_show_zi.toggled.connect(self._refresh_plots_only)
+        self.checkbox_dark_mode.toggled.connect(self._on_theme_toggled)
 
+        self._apply_theme()
         self.refresh_data()
+
+    def _register_plot_canvas(self, canvas):
+        self._plot_canvases.append(canvas)
+
+    def _register_plot_theme(self, plot, *, bottom_text=None, bottom_legend=None, left_text=None, title_text=None):
+        self._plot_theme_specs[id(plot)] = {
+            "plot": plot,
+            "bottom_text": bottom_text,
+            "bottom_legend": bottom_legend,
+            "left_text": left_text,
+            "title_text": title_text,
+        }
+
+    def _create_plot_explanation_label(self, titles):
+        lines = []
+        for title in titles:
+            math_note = _resolve_plot_math_note(title)
+            brief_note = _resolve_plot_brief_note(title)
+            lines.append(
+                f"<b>{title}</b><br>"
+                f"<span style='font-size: 9pt;'>{math_note}</span><br>"
+                f"<span style='font-size: 9pt;'>{brief_note}</span>"
+            )
+        label = QLabel("<br><br>".join(lines))
+        label.setObjectName("plotExplanation")
+        label.setWordWrap(True)
+        label.setTextFormat(Qt.RichText)
+        label.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        return label
+
+    def _build_stylesheet(self):
+        theme = self._theme
+        return f"""
+        QWidget {{
+            background-color: {theme["window_bg"]};
+            color: {theme["text"]};
+        }}
+        QMainWindow, QScrollArea, QScrollArea > QWidget > QWidget, QTabWidget::pane {{
+            background-color: {theme["window_bg"]};
+        }}
+        QGroupBox {{
+            background-color: {theme["surface_bg"]};
+            border: 1px solid {theme["border"]};
+            border-radius: 8px;
+            margin-top: 10px;
+            padding-top: 10px;
+            font-weight: 600;
+        }}
+        QGroupBox::title {{
+            subcontrol-origin: margin;
+            left: 12px;
+            padding: 0 4px;
+        }}
+        QLineEdit, QPlainTextEdit, QListWidget, QComboBox, QTableWidget, QTabBar::tab {{
+            background-color: {theme["input_bg"]};
+            color: {theme["text"]};
+            border: 1px solid {theme["border"]};
+            border-radius: 6px;
+            padding: 6px;
+        }}
+        QComboBox::drop-down {{
+            border: none;
+        }}
+        QTabBar::tab:selected {{
+            background-color: {theme["surface_bg"]};
+        }}
+        QHeaderView::section {{
+            background-color: {theme["surface_alt_bg"]};
+            color: {theme["text"]};
+            border: 1px solid {theme["border"]};
+            padding: 6px;
+        }}
+        QPushButton {{
+            background-color: {theme["surface_alt_bg"]};
+            color: {theme["text"]};
+            border: 1px solid {theme["border"]};
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-weight: 600;
+        }}
+        QPushButton:hover {{
+            border-color: {theme["selection_bg"]};
+        }}
+        QPushButton:disabled {{
+            color: {theme["muted_text"]};
+        }}
+        QPushButton#refreshButton {{
+            background-color: {theme["refresh_button"]};
+            color: #ffffff;
+            border: none;
+        }}
+        QPushButton#startRunButton {{
+            background-color: {theme["start_button"]};
+            color: #ffffff;
+            border: none;
+        }}
+        QPushButton#stopRunButton {{
+            background-color: {theme["stop_button"]};
+            color: #ffffff;
+            border: none;
+        }}
+        QPushButton#compareRunsButton {{
+            background-color: {theme["compare_button"]};
+            color: #ffffff;
+            border: none;
+        }}
+        QCheckBox, QLabel {{
+            color: {theme["text"]};
+        }}
+        QLabel#plotExplanation {{
+            background-color: {theme["surface_alt_bg"]};
+            border: 1px solid {theme["border"]};
+            border-radius: 6px;
+            padding: 8px 10px;
+            margin-top: 6px;
+            color: {theme["muted_text"]};
+        }}
+        QSlider::groove:horizontal {{
+            height: 6px;
+            background: {theme["surface_alt_bg"]};
+            border-radius: 3px;
+        }}
+        QSlider::handle:horizontal {{
+            background: {theme["selection_bg"]};
+            width: 16px;
+            margin: -5px 0;
+            border-radius: 8px;
+        }}
+        QAbstractItemView {{
+            selection-background-color: {theme["selection_bg"]};
+            selection-color: {theme["selection_text"]};
+        }}
+        """
+
+    def _apply_theme_to_plot(self, plot):
+        theme = self._theme
+        for axis_name in ("left", "bottom"):
+            axis = plot.getAxis(axis_name)
+            axis.setPen(pg.mkPen(theme["plot_foreground"]))
+            axis.setTextPen(pg.mkPen(theme["plot_foreground"]))
+
+        spec = self._plot_theme_specs.get(id(plot))
+        if spec:
+            if spec["left_text"]:
+                plot.setLabel("left", spec["left_text"], color=theme["plot_foreground"])
+            if spec["bottom_text"]:
+                _set_plot_bottom_label(
+                    plot,
+                    spec["bottom_text"],
+                    spec["bottom_legend"],
+                    text_color=theme["plot_foreground"],
+                )
+
+    def _apply_theme(self):
+        self._theme = APP_THEMES[self._theme_mode]
+        pg.setConfigOption("background", self._theme["plot_background"])
+        pg.setConfigOption("foreground", self._theme["plot_foreground"])
+        self.setStyleSheet(self._build_stylesheet())
+
+        if hasattr(self, "plot_market"):
+            market_spec = self._plot_theme_specs.get(id(self.plot_market))
+            if market_spec and market_spec["bottom_legend"]:
+                market_spec["bottom_legend"][-1] = ("Mid Price", self._theme["plot_mid_price"])
+
+        for canvas in self._plot_canvases:
+            canvas.setBackground(self._theme["plot_background"])
+        for spec in self._plot_theme_specs.values():
+            self._apply_theme_to_plot(spec["plot"])
+
+        if hasattr(self, "line_mid_price"):
+            self.line_mid_price.setPen(pg.mkPen(self._theme["plot_mid_price"], width=3))
+        for zero_line in self._comparison_zero_lines.values():
+            zero_line.setPen(pg.mkPen(self._theme["plot_reference"], width=1, style=Qt.DashLine))
+
+        if hasattr(self, "comparison_param_runs_label"):
+            labels_html = _format_run_label_html(
+                self._comparison_legend_items,
+                text_color=self._theme["plot_foreground"],
+            )
+            self.comparison_param_runs_label.setText(labels_html)
+            self.comparison_wealth_runs_label.setText(labels_html)
+
+        if hasattr(self, "checkbox_dark_mode"):
+            self.checkbox_dark_mode.blockSignals(True)
+            self.checkbox_dark_mode.setChecked(self._theme_mode == "dark")
+            self.checkbox_dark_mode.blockSignals(False)
+
+        if hasattr(self, "plot_params"):
+            self._update_all_plot_titles()
+            self._refresh_plots_only()
+
+    def _on_theme_toggled(self, checked):
+        self._theme_mode = "dark" if checked else "light"
+        self._apply_theme()
 
     def _build_left_panel(self, left_layout):
         data_group = QGroupBox("Database Controls")
@@ -1324,6 +1966,8 @@ class CommandCenter(QMainWindow):
         self.checkbox_show_parameterised.setChecked(True)
         self.checkbox_show_zi = QCheckBox("Show ZI")
         self.checkbox_show_zi.setChecked(True)
+        self.checkbox_dark_mode = QCheckBox("Dark mode")
+        self.checkbox_dark_mode.setChecked(False)
         data_form.addRow("DuckDB File:", self.input_db_path)
         data_form.addRow("Experiment:", self.combo_experiment)
         data_form.addRow("Generation:", self.combo_generation)
@@ -1333,13 +1977,12 @@ class CommandCenter(QMainWindow):
         data_form.addRow("", self.smoothing_slider_label)
         data_form.addRow("Series Visibility:", self.checkbox_show_parameterised)
         data_form.addRow("", self.checkbox_show_zi)
+        data_form.addRow("Appearance:", self.checkbox_dark_mode)
         data_group.setLayout(data_form)
         left_layout.addWidget(data_group)
 
         self.btn_refresh = QPushButton("Refresh Database")
-        self.btn_refresh.setStyleSheet(
-            "background-color: #2e8b57; color: white; font-weight: bold; padding: 10px;"
-        )
+        self.btn_refresh.setObjectName("refreshButton")
         self.btn_refresh.clicked.connect(self.refresh_data)
         left_layout.addWidget(self.btn_refresh)
 
@@ -1390,45 +2033,12 @@ class CommandCenter(QMainWindow):
         left_layout.addWidget(run_group)
 
         self.btn_start_run = QPushButton("Start New Run")
-        self.btn_start_run.setStyleSheet(
-            "background-color: #1f5fa5; color: white; font-weight: bold; padding: 10px;"
-        )
+        self.btn_start_run.setObjectName("startRunButton")
         self.btn_start_run.clicked.connect(self.start_new_run)
         left_layout.addWidget(self.btn_start_run)
 
-        batch_group = QGroupBox("Run Batch From Text File")
-        batch_layout = QVBoxLayout()
-        batch_help = QLabel(
-            "Use a .txt file with key=value pairs, separated by blank lines or --- between runs."
-        )
-        batch_help.setWordWrap(True)
-        batch_path_row = QHBoxLayout()
-        self.batch_file_input = QLineEdit()
-        self.batch_file_input.setPlaceholderText("Select a .txt parameter file")
-        self.btn_browse_batch_file = QPushButton("Browse...")
-        self.btn_browse_batch_file.clicked.connect(self.browse_batch_file)
-        batch_path_row.addWidget(self.batch_file_input, stretch=1)
-        batch_path_row.addWidget(self.btn_browse_batch_file)
-        self.batch_format_label = QLabel(
-            "Example: experiment_name=Run A, n_generations=50, GBM_drift=0.02, mutation_rate=0.05"
-        )
-        self.batch_format_label.setWordWrap(True)
-        self.btn_start_batch_run = QPushButton("Run Batch File")
-        self.btn_start_batch_run.setStyleSheet(
-            "background-color: #7b4bb7; color: white; font-weight: bold; padding: 10px;"
-        )
-        self.btn_start_batch_run.clicked.connect(self.start_batch_run)
-        batch_layout.addWidget(batch_help)
-        batch_layout.addLayout(batch_path_row)
-        batch_layout.addWidget(self.batch_format_label)
-        batch_layout.addWidget(self.btn_start_batch_run)
-        batch_group.setLayout(batch_layout)
-        left_layout.addWidget(batch_group)
-
         self.btn_stop_run = QPushButton("Stop Current Run")
-        self.btn_stop_run.setStyleSheet(
-            "background-color: #a52a2a; color: white; font-weight: bold; padding: 10px;"
-        )
+        self.btn_stop_run.setObjectName("stopRunButton")
         self.btn_stop_run.clicked.connect(self.stop_run)
         self.btn_stop_run.setEnabled(False)
         left_layout.addWidget(self.btn_stop_run)
@@ -1446,27 +2056,60 @@ class CommandCenter(QMainWindow):
         self.comparison_experiment_list = QListWidget()
         self.comparison_experiment_list.setSelectionMode(QListWidget.MultiSelection)
         self.btn_compare_runs = QPushButton("Compare Selected Runs")
-        self.btn_compare_runs.setStyleSheet(
-            "background-color: #6a5acd; color: white; font-weight: bold; padding: 10px;"
-        )
+        self.btn_compare_runs.setObjectName("compareRunsButton")
         self.btn_compare_runs.clicked.connect(self.load_comparison_data)
         self.btn_clear_comparison = QPushButton("Clear Comparison")
         self.btn_clear_comparison.clicked.connect(self.clear_comparison)
         self.comparison_status_label = QLabel("Select experiments and click Compare Selected Runs.")
         self.comparison_status_label.setWordWrap(True)
+        sweep_help = QLabel(
+            "Run sweep comparisons as normal persisted experiments. The comparison plots update live as each generation finishes and PNG snapshots are saved to comparison_outputs."
+        )
+        sweep_help.setWordWrap(True)
+        sweep_form = QFormLayout()
+        self.combo_sweep_type = QComboBox()
+        self.combo_sweep_type.addItems(["population", "drift", "volatility"])
+        self.combo_sweep_type.currentTextChanged.connect(self._apply_sweep_defaults)
+        self.sweep_total_agents_input = QLineEdit()
+        self.sweep_generations_input = QLineEdit()
+        self.sweep_rounds_input = QLineEdit()
+        self.sweep_fixed_drift_input = QLineEdit()
+        self.sweep_fixed_volatility_input = QLineEdit()
+        self.sweep_population_values_input = QLineEdit()
+        self.sweep_drift_values_input = QLineEdit()
+        self.sweep_volatility_values_input = QLineEdit()
+        sweep_form.addRow("Sweep Type:", self.combo_sweep_type)
+        sweep_form.addRow("Total Agents:", self.sweep_total_agents_input)
+        sweep_form.addRow("Generations:", self.sweep_generations_input)
+        sweep_form.addRow("Rounds:", self.sweep_rounds_input)
+        sweep_form.addRow("Fixed Drift:", self.sweep_fixed_drift_input)
+        sweep_form.addRow("Fixed Volatility:", self.sweep_fixed_volatility_input)
+        sweep_form.addRow("Population Pairs:", self.sweep_population_values_input)
+        sweep_form.addRow("Drift Values:", self.sweep_drift_values_input)
+        sweep_form.addRow("Volatility Values:", self.sweep_volatility_values_input)
+        self.btn_run_sweep_comparison = QPushButton("Run Sweep Comparison")
+        self.btn_run_sweep_comparison.setObjectName("compareRunsButton")
+        self.btn_run_sweep_comparison.clicked.connect(self.run_sweep_comparison)
+        self.btn_clear_sweep_comparison = QPushButton("Clear Sweep Comparison")
+        self.btn_clear_sweep_comparison.clicked.connect(self.clear_sweep_comparison)
+        self.sweep_status_label = QLabel("Select a sweep and click Run Sweep Comparison.")
+        self.sweep_status_label.setWordWrap(True)
         comparison_layout.addWidget(comparison_help)
         comparison_layout.addWidget(self.comparison_experiment_list)
         comparison_layout.addWidget(self.btn_compare_runs)
         comparison_layout.addWidget(self.btn_clear_comparison)
         comparison_layout.addWidget(self.comparison_status_label)
+        comparison_layout.addWidget(sweep_help)
+        comparison_layout.addLayout(sweep_form)
+        comparison_layout.addWidget(self.btn_run_sweep_comparison)
+        comparison_layout.addWidget(self.btn_clear_sweep_comparison)
+        comparison_layout.addWidget(self.sweep_status_label)
         comparison_group.setLayout(comparison_layout)
         left_layout.addWidget(comparison_group)
+        self._apply_sweep_defaults(self.combo_sweep_type.currentText())
         left_layout.addStretch()
 
     def _build_dashboard_tab(self):
-        pg.setConfigOption("background", GRAPH_BACKGROUND)
-        pg.setConfigOption("foreground", GRAPH_FOREGROUND)
-
         layout = QVBoxLayout(self.dashboard_tab)
         dashboard_scroll = QScrollArea()
         dashboard_scroll.setWidgetResizable(True)
@@ -1476,8 +2119,21 @@ class CommandCenter(QMainWindow):
         dashboard_content = QWidget()
         dashboard_layout = QVBoxLayout(dashboard_content)
         self.graph_area = pg.GraphicsLayoutWidget()
+        self._register_plot_canvas(self.graph_area)
         self.graph_area.setMinimumHeight(1800)
         dashboard_layout.addWidget(self.graph_area)
+        dashboard_layout.addWidget(
+            self._create_plot_explanation_label(
+                [
+                    "Mean Strategy Parameters Across Generations",
+                    "Mean Wealth by Strategy",
+                    "Mean Info_Param by Strategy",
+                    "Market Summary by Round",
+                    "Average Profit per Round: ZI vs Parameterised",
+                    "Average Agent Volume Share per Round",
+                ]
+            )
+        )
         dashboard_scroll.setWidget(dashboard_content)
 
         self.plot_params_title = "Mean Strategy Parameters Across Generations"
@@ -1489,15 +2145,16 @@ class CommandCenter(QMainWindow):
 
         self.plot_params = self.graph_area.addPlot(title=self._format_plot_title(self.plot_params_title))
         _style_plot(self.plot_params)
-        _set_plot_bottom_label(
+        self._register_plot_theme(
             self.plot_params,
-            "Generation",
-            [
+            bottom_text="Generation",
+            bottom_legend=[
                 ("Qty Aggression", (255, 140, 0)),
                 ("Signal Aggression", (70, 130, 180)),
             ],
+            left_text="Mean Parameter Value",
+            title_text=self.plot_params_title,
         )
-        self.plot_params.setLabel("left", "Mean Parameter Value")
         self.line_qty = self.plot_params.plot(pen=pg.mkPen((255, 140, 0), width=3), name="Qty Aggression")
         self.line_signal = self.plot_params.plot(pen=pg.mkPen((70, 130, 180), width=3), name="Signal Aggression")
 
@@ -1505,15 +2162,16 @@ class CommandCenter(QMainWindow):
 
         self.plot_wealth = self.graph_area.addPlot(title=self._format_plot_title(self.plot_wealth_title))
         _style_plot(self.plot_wealth)
-        _set_plot_bottom_label(
+        self._register_plot_theme(
             self.plot_wealth,
-            "Generation",
-            [
+            bottom_text="Generation",
+            bottom_legend=[
                 ("Parameterised Informed", (30, 144, 255)),
                 ("ZI", (205, 92, 92)),
             ],
+            left_text="Mean Wealth",
+            title_text=self.plot_wealth_title,
         )
-        self.plot_wealth.setLabel("left", "Mean Wealth")
         self.line_informed_wealth = self.plot_wealth.plot(
             pen=pg.mkPen((30, 144, 255), width=3), name="Parameterised Informed"
         )
@@ -1527,15 +2185,16 @@ class CommandCenter(QMainWindow):
             title=self._format_plot_title(self.plot_info_param_title)
         )
         _style_plot(self.plot_info_param)
-        _set_plot_bottom_label(
+        self._register_plot_theme(
             self.plot_info_param,
-            "Generation",
-            [
+            bottom_text="Generation",
+            bottom_legend=[
                 ("Parameterised Informed", (30, 144, 255)),
                 ("ZI", (205, 92, 92)),
             ],
+            left_text="Mean Info_Param",
+            title_text=self.plot_info_param_title,
         )
-        self.plot_info_param.setLabel("left", "Mean Info_Param")
         self.line_info_param_informed = self.plot_info_param.plot(
             pen=pg.mkPen((30, 144, 255), width=3), name="Parameterised Informed"
         )
@@ -1547,10 +2206,10 @@ class CommandCenter(QMainWindow):
 
         self.plot_market = self.graph_area.addPlot(title=self._format_plot_title(self.plot_market_title))
         _style_plot(self.plot_market)
-        _set_plot_bottom_label(
+        self._register_plot_theme(
             self.plot_market,
-            "Round",
-            [
+            bottom_text="Round",
+            bottom_legend=[
                 ("Max Bid", (30, 144, 255)),
                 ("Max Sell", (220, 20, 60)),
                 ("Min Bid", (135, 206, 250)),
@@ -1558,10 +2217,11 @@ class CommandCenter(QMainWindow):
                 ("Bid Price Q2", (65, 105, 225)),
                 ("Ask Price Q3", (178, 34, 34)),
                 ("Fundamental", (128, 128, 128)),
-                ("Mid Price", (255, 255, 255)),
+                ("Mid Price", self._theme["plot_mid_price"]),
             ],
+            left_text="Price",
+            title_text=self.plot_market_title,
         )
-        self.plot_market.setLabel("left", "Price")
         self.line_max_bid = self.plot_market.plot(pen=pg.mkPen((30, 144, 255), width=2), name="Max Bid")
         self.line_max_sell = self.plot_market.plot(pen=pg.mkPen((220, 20, 60), width=2), name="Max Sell")
         self.line_min_bid = self.plot_market.plot(pen=pg.mkPen((135, 206, 250), width=1), name="Min Bid")
@@ -1576,22 +2236,23 @@ class CommandCenter(QMainWindow):
             pen=pg.mkPen((128, 128, 128), width=2), name="Fundamental"
         )
         self.line_mid_price = self.plot_market.plot(
-            pen=pg.mkPen((0, 0, 0), width=3), name="Mid Price"
+            pen=pg.mkPen(self._theme["plot_mid_price"], width=3), name="Mid Price"
         )
 
         self.graph_area.nextRow()
 
         self.plot_profit = self.graph_area.addPlot(title=self._format_plot_title(self.plot_profit_title))
         _style_plot(self.plot_profit)
-        _set_plot_bottom_label(
+        self._register_plot_theme(
             self.plot_profit,
-            "Round",
-            [
+            bottom_text="Round",
+            bottom_legend=[
                 ("Parameterised Informed", (30, 144, 255)),
                 ("ZI", (205, 92, 92)),
             ],
+            left_text="Average Profit",
+            title_text=self.plot_profit_title,
         )
-        self.plot_profit.setLabel("left", "Average Profit")
         self.line_profit_informed = self.plot_profit.plot(
             pen=pg.mkPen((30, 144, 255), width=3), name="Parameterised Informed"
         )
@@ -1603,15 +2264,16 @@ class CommandCenter(QMainWindow):
 
         self.plot_volume_share = self.graph_area.addPlot(title=self._format_plot_title(self.plot_volume_share_title))
         _style_plot(self.plot_volume_share)
-        _set_plot_bottom_label(
+        self._register_plot_theme(
             self.plot_volume_share,
-            "Round",
-            [
+            bottom_text="Round",
+            bottom_legend=[
                 ("Parameterised Informed", (30, 144, 255)),
                 ("ZI", (205, 92, 92)),
             ],
+            left_text="Average Volume Share",
+            title_text=self.plot_volume_share_title,
         )
-        self.plot_volume_share.setLabel("left", "Average Volume Share")
         self.line_volume_informed = self.plot_volume_share.plot(
             pen=pg.mkPen((30, 144, 255), width=3), name="Parameterised Informed"
         )
@@ -1650,53 +2312,187 @@ class CommandCenter(QMainWindow):
         parameter_group = QGroupBox("Parameter Comparison Across Generations")
         parameter_layout = QVBoxLayout(parameter_group)
         self.comparison_param_area = pg.GraphicsLayoutWidget()
+        self._register_plot_canvas(self.comparison_param_area)
         self.comparison_param_area.setMinimumHeight(1300)
         parameter_layout.addWidget(self.comparison_param_area)
         self.comparison_param_runs_label = QLabel("No runs selected.")
         self.comparison_param_runs_label.setWordWrap(True)
         parameter_layout.addWidget(self.comparison_param_runs_label)
+        parameter_layout.addWidget(
+            self._create_plot_explanation_label(
+                [title for _, title in COMPARISON_PARAM_SPECS]
+            )
+        )
         content_layout.addWidget(parameter_group)
 
         wealth_group = QGroupBox("Wealth Difference Across Generations")
         wealth_layout = QVBoxLayout(wealth_group)
         self.comparison_wealth_area = pg.GraphicsLayoutWidget()
+        self._register_plot_canvas(self.comparison_wealth_area)
         self.comparison_wealth_area.setMinimumHeight(450)
         wealth_layout.addWidget(self.comparison_wealth_area)
         self.comparison_wealth_runs_label = QLabel("No runs selected.")
         self.comparison_wealth_runs_label.setWordWrap(True)
         wealth_layout.addWidget(self.comparison_wealth_runs_label)
+        wealth_layout.addWidget(
+            self._create_plot_explanation_label([COMPARISON_WEALTH_DIFF_SPEC[1]])
+        )
         content_layout.addWidget(wealth_group)
+
+        sweep_summary_group = QGroupBox("Sweep Run Summary")
+        sweep_summary_layout = QVBoxLayout(sweep_summary_group)
+        self.sweep_summary_label = QLabel(
+            "No sweep comparison loaded. Configure a sweep from the left panel."
+        )
+        self.sweep_summary_label.setWordWrap(True)
+        sweep_summary_layout.addWidget(self.sweep_summary_label)
+        content_layout.addWidget(sweep_summary_group)
+
+        sweep_parameter_group = QGroupBox("Sweep Parameters Across Generations")
+        sweep_parameter_layout = QVBoxLayout(sweep_parameter_group)
+        self.sweep_param_area = pg.GraphicsLayoutWidget()
+        self._register_plot_canvas(self.sweep_param_area)
+        self.sweep_param_area.setMinimumHeight(1000)
+        sweep_parameter_layout.addWidget(self.sweep_param_area)
+        self.sweep_param_runs_label = QLabel("No sweep runs selected.")
+        self.sweep_param_runs_label.setWordWrap(True)
+        sweep_parameter_layout.addWidget(self.sweep_param_runs_label)
+        sweep_parameter_layout.addWidget(
+            self._create_plot_explanation_label(
+                [title for _, title in SWEEP_PARAM_SUBPLOTS]
+            )
+        )
+        content_layout.addWidget(sweep_parameter_group)
+
+        sweep_diversity_group = QGroupBox("Sweep Diversity Across Generations")
+        sweep_diversity_layout = QVBoxLayout(sweep_diversity_group)
+        self.sweep_diversity_area = pg.GraphicsLayoutWidget()
+        self._register_plot_canvas(self.sweep_diversity_area)
+        self.sweep_diversity_area.setMinimumHeight(1000)
+        sweep_diversity_layout.addWidget(self.sweep_diversity_area)
+        self.sweep_diversity_runs_label = QLabel("No sweep runs selected.")
+        self.sweep_diversity_runs_label.setWordWrap(True)
+        sweep_diversity_layout.addWidget(self.sweep_diversity_runs_label)
+        sweep_diversity_layout.addWidget(
+            self._create_plot_explanation_label(
+                [title for _, title in SWEEP_STD_SUBPLOTS]
+            )
+        )
+        content_layout.addWidget(sweep_diversity_group)
+
+        sweep_wealth_group = QGroupBox("Sweep Wealth Difference Across Generations")
+        sweep_wealth_layout = QVBoxLayout(sweep_wealth_group)
+        self.sweep_wealth_area = pg.GraphicsLayoutWidget()
+        self._register_plot_canvas(self.sweep_wealth_area)
+        self.sweep_wealth_area.setMinimumHeight(450)
+        sweep_wealth_layout.addWidget(self.sweep_wealth_area)
+        self.sweep_wealth_runs_label = QLabel("No sweep runs selected.")
+        self.sweep_wealth_runs_label.setWordWrap(True)
+        sweep_wealth_layout.addWidget(self.sweep_wealth_runs_label)
+        sweep_wealth_layout.addWidget(
+            self._create_plot_explanation_label([COMPARISON_WEALTH_DIFF_SPEC[1]])
+        )
+        content_layout.addWidget(sweep_wealth_group)
 
         comparison_scroll.setWidget(content)
 
         self.comparison_param_plots = {}
         self.comparison_wealth_plots = {}
         self.comparison_param_curves = {}
+        self.sweep_param_plots = {}
+        self.sweep_diversity_plots = {}
+        self.sweep_wealth_plots = {}
         self.comparison_plot_titles = {}
+        self.sweep_plot_titles = {}
 
         for idx, (metric_key, title) in enumerate(COMPARISON_PARAM_SPECS):
-            plot = self.comparison_param_area.addPlot(title=self._format_plot_title(title))
+            plot_kwargs = {"title": self._format_plot_title(title)}
+            if metric_key == "mean_info_param_parameterised_informed":
+                plot_kwargs.update({"row": idx // 2, "col": 0, "colspan": 2})
+            plot = self.comparison_param_area.addPlot(**plot_kwargs)
             _style_plot(plot)
-            plot.setLabel("left", "Value")
-            plot.setLabel("bottom", "Generation")
+            self._register_plot_theme(plot, bottom_text="Generation", left_text="Value", title_text=title)
             self.comparison_param_plots[metric_key] = plot
             self.comparison_param_curves[metric_key] = {}
             self.comparison_plot_titles[metric_key] = title
-            if idx % 2 == 1:
+            if idx % 2 == 1 and metric_key != "mean_info_param_parameterised_informed":
                 self.comparison_param_area.nextRow()
         self.comparison_param_area.ci.layout.setColumnStretchFactor(0, 1)
         self.comparison_param_area.ci.layout.setColumnStretchFactor(1, 1)
 
         wealth_metric_key, wealth_title = COMPARISON_WEALTH_DIFF_SPEC
-        wealth_plot = self.comparison_wealth_area.addPlot(title=self._format_plot_title(wealth_title))
+        wealth_plot = self.comparison_wealth_area.addPlot(
+            row=0,
+            col=0,
+            colspan=2,
+            title=self._format_plot_title(wealth_title),
+        )
         _style_plot(wealth_plot)
-        wealth_plot.setLabel("left", "Wealth Difference")
-        wealth_plot.setLabel("bottom", "Generation")
-        wealth_plot.addLine(y=0, pen=pg.mkPen((255, 255, 255, 100), width=1, style=Qt.DashLine))
+        self._register_plot_theme(
+            wealth_plot,
+            bottom_text="Generation",
+            left_text="Wealth Difference",
+            title_text=wealth_title,
+        )
+        self._comparison_zero_lines[wealth_metric_key] = wealth_plot.addLine(
+            y=0,
+            pen=pg.mkPen(self._theme["plot_reference"], width=1, style=Qt.DashLine),
+        )
         self.comparison_wealth_plots[wealth_metric_key] = wealth_plot
         self.comparison_plot_titles[wealth_metric_key] = wealth_title
         self.comparison_wealth_area.ci.layout.setColumnStretchFactor(0, 1)
         self.comparison_wealth_area.ci.layout.setColumnStretchFactor(1, 1)
+
+        for idx, (metric_key, title) in enumerate(SWEEP_PARAM_SUBPLOTS):
+            plot_kwargs = {"title": self._format_plot_title(title)}
+            if metric_key == "mean_info_param_parameterised_informed":
+                plot_kwargs.update({"row": idx // 2, "col": 0, "colspan": 2})
+            plot = self.sweep_param_area.addPlot(**plot_kwargs)
+            _style_plot(plot)
+            self._register_plot_theme(plot, bottom_text="Generation", left_text="Mean Value", title_text=title)
+            self.sweep_param_plots[metric_key] = plot
+            self.sweep_plot_titles[metric_key] = title
+            if idx % 2 == 1 and metric_key != "mean_info_param_parameterised_informed":
+                self.sweep_param_area.nextRow()
+        self.sweep_param_area.ci.layout.setColumnStretchFactor(0, 1)
+        self.sweep_param_area.ci.layout.setColumnStretchFactor(1, 1)
+
+        for idx, (metric_key, title) in enumerate(SWEEP_STD_SUBPLOTS):
+            plot_kwargs = {"title": self._format_plot_title(title)}
+            if metric_key == "std_info_param_parameterised_informed":
+                plot_kwargs.update({"row": idx // 2, "col": 0, "colspan": 2})
+            plot = self.sweep_diversity_area.addPlot(**plot_kwargs)
+            _style_plot(plot)
+            self._register_plot_theme(plot, bottom_text="Generation", left_text="Std Dev", title_text=title)
+            self.sweep_diversity_plots[metric_key] = plot
+            self.sweep_plot_titles[metric_key] = title
+            if idx % 2 == 1 and metric_key != "std_info_param_parameterised_informed":
+                self.sweep_diversity_area.nextRow()
+        self.sweep_diversity_area.ci.layout.setColumnStretchFactor(0, 1)
+        self.sweep_diversity_area.ci.layout.setColumnStretchFactor(1, 1)
+
+        sweep_wealth_metric_key, sweep_wealth_title = COMPARISON_WEALTH_DIFF_SPEC
+        sweep_wealth_plot = self.sweep_wealth_area.addPlot(
+            row=0,
+            col=0,
+            colspan=2,
+            title=self._format_plot_title(sweep_wealth_title)
+        )
+        _style_plot(sweep_wealth_plot)
+        self._register_plot_theme(
+            sweep_wealth_plot,
+            bottom_text="Generation",
+            left_text="Wealth Difference",
+            title_text=sweep_wealth_title,
+        )
+        sweep_wealth_plot.addLine(
+            y=0,
+            pen=pg.mkPen(self._theme["plot_reference"], width=1, style=Qt.DashLine),
+        )
+        self.sweep_wealth_plots[sweep_wealth_metric_key] = sweep_wealth_plot
+        self.sweep_plot_titles[sweep_wealth_metric_key] = sweep_wealth_title
+        self.sweep_wealth_area.ci.layout.setColumnStretchFactor(0, 1)
+        self.sweep_wealth_area.ci.layout.setColumnStretchFactor(1, 1)
 
     def _build_microstructure_tab(self):
         layout = QVBoxLayout(self.microstructure_tab)
@@ -1727,8 +2523,20 @@ class CommandCenter(QMainWindow):
         content_layout.addWidget(summary_group)
 
         self.microstructure_area = pg.GraphicsLayoutWidget()
+        self._register_plot_canvas(self.microstructure_area)
         self.microstructure_area.setMinimumHeight(1800)
         content_layout.addWidget(self.microstructure_area)
+        content_layout.addWidget(
+            self._create_plot_explanation_label(
+                [
+                    "Limit Order Book Snapshot",
+                    "Candlestick View",
+                    "Trade Network",
+                    "Order Imbalance and Spread",
+                    "Participation and Volume",
+                ]
+            )
+        )
         microstructure_scroll.setWidget(content)
 
         self.micro_lob_title = "Limit Order Book Snapshot"
@@ -1741,15 +2549,23 @@ class CommandCenter(QMainWindow):
             title=self._format_plot_title(self.micro_lob_title)
         )
         _style_plot(self.micro_lob_plot)
-        self.micro_lob_plot.setLabel("left", "Order Qty")
-        self.micro_lob_plot.setLabel("bottom", "Limit Price")
+        self._register_plot_theme(
+            self.micro_lob_plot,
+            bottom_text="Limit Price",
+            left_text="Order Qty",
+            title_text=self.micro_lob_title,
+        )
 
         self.micro_candle_plot = self.microstructure_area.addPlot(
             title=self._format_plot_title(self.micro_candle_title)
         )
         _style_plot(self.micro_candle_plot)
-        self.micro_candle_plot.setLabel("left", "Price")
-        self.micro_candle_plot.setLabel("bottom", "Round")
+        self._register_plot_theme(
+            self.micro_candle_plot,
+            bottom_text="Round",
+            left_text="Price",
+            title_text=self.micro_candle_title,
+        )
 
         self.microstructure_area.nextRow()
 
@@ -1757,8 +2573,12 @@ class CommandCenter(QMainWindow):
             title=self._format_plot_title(self.micro_network_title)
         )
         _style_plot(self.micro_network_plot)
-        self.micro_network_plot.setLabel("left", "Y")
-        self.micro_network_plot.setLabel("bottom", "X")
+        self._register_plot_theme(
+            self.micro_network_plot,
+            bottom_text="X",
+            left_text="Y",
+            title_text=self.micro_network_title,
+        )
         self.micro_network_plot.hideAxis("left")
         self.micro_network_plot.hideAxis("bottom")
 
@@ -1766,17 +2586,28 @@ class CommandCenter(QMainWindow):
             title=self._format_plot_title(self.micro_pressure_title)
         )
         _style_plot(self.micro_pressure_plot)
-        self.micro_pressure_plot.setLabel("left", "Value")
-        self.micro_pressure_plot.setLabel("bottom", "Round")
+        self._register_plot_theme(
+            self.micro_pressure_plot,
+            bottom_text="Round",
+            left_text="Value",
+            title_text=self.micro_pressure_title,
+        )
 
         self.microstructure_area.nextRow()
 
         self.micro_activity_plot = self.microstructure_area.addPlot(
+            row=2,
+            col=0,
+            colspan=2,
             title=self._format_plot_title(self.micro_activity_title)
         )
         _style_plot(self.micro_activity_plot)
-        self.micro_activity_plot.setLabel("left", "Value")
-        self.micro_activity_plot.setLabel("bottom", "Round")
+        self._register_plot_theme(
+            self.micro_activity_plot,
+            bottom_text="Round",
+            left_text="Value",
+            title_text=self.micro_activity_title,
+        )
         self.microstructure_area.ci.layout.setColumnStretchFactor(0, 1)
         self.microstructure_area.ci.layout.setColumnStretchFactor(1, 1)
 
@@ -1793,6 +2624,7 @@ class CommandCenter(QMainWindow):
         generation_group = QGroupBox("Strategy Performance Across Generations")
         generation_layout = QVBoxLayout(generation_group)
         self.performance_generation_area = pg.GraphicsLayoutWidget()
+        self._register_plot_canvas(self.performance_generation_area)
         self.performance_generation_area.setMinimumHeight(1500)
         generation_layout.addWidget(self.performance_generation_area)
         content_layout.addWidget(generation_group)
@@ -1800,6 +2632,7 @@ class CommandCenter(QMainWindow):
         round_group = QGroupBox("Strategy Performance Across Rounds")
         round_layout = QVBoxLayout(round_group)
         self.performance_round_area = pg.GraphicsLayoutWidget()
+        self._register_plot_canvas(self.performance_round_area)
         self.performance_round_area.setMinimumHeight(1500)
         round_layout.addWidget(self.performance_round_area)
         content_layout.addWidget(round_group)
@@ -1832,6 +2665,11 @@ class CommandCenter(QMainWindow):
         )
         self.performance_generation_area.ci.layout.setColumnStretchFactor(0, 1)
         self.performance_generation_area.ci.layout.setColumnStretchFactor(1, 1)
+        generation_layout.addWidget(
+            self._create_plot_explanation_label(
+                [title for _, title in generation_metrics]
+            )
+        )
 
         round_metrics = [
             ("avg_wealth", "Average Wealth per Round"),
@@ -1854,6 +2692,11 @@ class CommandCenter(QMainWindow):
         )
         self.performance_round_area.ci.layout.setColumnStretchFactor(0, 1)
         self.performance_round_area.ci.layout.setColumnStretchFactor(1, 1)
+        round_layout.addWidget(
+            self._create_plot_explanation_label(
+                [title for _, title in round_metrics]
+            )
+        )
 
     def _build_agent_performance_tab(self):
         layout = QVBoxLayout(self.agent_performance_tab)
@@ -1868,13 +2711,25 @@ class CommandCenter(QMainWindow):
         generation_group = QGroupBox("Agent Performance Across Generations")
         generation_layout = QVBoxLayout(generation_group)
         self.agent_generation_area = pg.GraphicsLayoutWidget()
+        self._register_plot_canvas(self.agent_generation_area)
         self.agent_generation_area.setMinimumHeight(900)
         generation_layout.addWidget(self.agent_generation_area)
+        generation_layout.addWidget(
+            self._create_plot_explanation_label(
+                [
+                    "Profit Change vs Prev Gen",
+                    "Info_Param per Agent",
+                    "Qty_Aggression per Agent",
+                    "Signal_Aggression per Agent",
+                ]
+            )
+        )
         content_layout.addWidget(generation_group)
 
         round_group = QGroupBox("Agent Performance Across Rounds")
         round_layout = QVBoxLayout(round_group)
         self.agent_round_area = pg.GraphicsLayoutWidget()
+        self._register_plot_canvas(self.agent_round_area)
         self.agent_round_area.setMinimumHeight(2100)
         round_layout.addWidget(self.agent_round_area)
         content_layout.addWidget(round_group)
@@ -1891,15 +2746,16 @@ class CommandCenter(QMainWindow):
             title=self._format_plot_title(profit_change_title)
         )
         _style_plot(profit_change_plot)
-        _set_plot_bottom_label(
+        self._register_plot_theme(
             profit_change_plot,
-            "Generation",
-            [
+            bottom_text="Generation",
+            bottom_legend=[
                 ("ZI", STRATEGY_COLORS["zi"]),
                 ("Parameterised Informed", STRATEGY_COLORS["parameterised_informed"]),
             ],
+            left_text="Value",
+            title_text=profit_change_title,
         )
-        profit_change_plot.setLabel("left", "Value")
         self.agent_generation_plots["profit_change_from_prev_gen"] = (
             profit_change_plot,
             profit_change_title,
@@ -1923,8 +2779,12 @@ class CommandCenter(QMainWindow):
             title=self._format_plot_title(generation_line_specs[0][1])
         )
         _style_plot(self.agent_info_param_plot)
-        self.agent_info_param_plot.setLabel("bottom", "Generation")
-        self.agent_info_param_plot.setLabel("left", generation_line_specs[0][2])
+        self._register_plot_theme(
+            self.agent_info_param_plot,
+            bottom_text="Generation",
+            left_text=generation_line_specs[0][2],
+            title_text=generation_line_specs[0][1],
+        )
         self.agent_generation_area.nextRow()
         self._initialise_agent_generation_line_grid(generation_line_specs[1:])
         self.agent_generation_area.ci.layout.setColumnStretchFactor(0, 1)
@@ -1953,20 +2813,26 @@ class CommandCenter(QMainWindow):
         )
         self.agent_round_area.ci.layout.setColumnStretchFactor(0, 1)
         self.agent_round_area.ci.layout.setColumnStretchFactor(1, 1)
+        round_layout.addWidget(
+            self._create_plot_explanation_label(
+                [title for _, title in round_metrics]
+            )
+        )
 
     def _initialise_metric_grid(self, graph_area, metric_specs, curve_store, x_label, plot_store=None):
         for idx, (metric_key, title) in enumerate(metric_specs):
             plot = graph_area.addPlot(title=self._format_plot_title(title))
             _style_plot(plot)
-            _set_plot_bottom_label(
+            self._register_plot_theme(
                 plot,
-                x_label,
-                [
+                bottom_text=x_label,
+                bottom_legend=[
                     ("ZI", STRATEGY_COLORS["zi"]),
                     ("Parameterised Informed", STRATEGY_COLORS["parameterised_informed"]),
                 ],
+                left_text="Value",
+                title_text=title,
             )
-            plot.setLabel("left", "Value")
             if plot_store is not None:
                 plot_store[metric_key] = (plot, title)
             curve_store[metric_key] = {
@@ -1988,8 +2854,7 @@ class CommandCenter(QMainWindow):
                 title=self._format_plot_title(title)
             )
             _style_plot(plot)
-            plot.setLabel("bottom", x_label)
-            plot.setLabel("left", "Value")
+            self._register_plot_theme(plot, bottom_text=x_label, left_text="Value", title_text=title)
             plot_store[metric_key] = (plot, title)
             if idx % 2 == 1:
                 self.agent_round_area.nextRow()
@@ -1998,8 +2863,7 @@ class CommandCenter(QMainWindow):
         for idx, (attr_name, title, y_label) in enumerate(plot_specs):
             plot = self.agent_generation_area.addPlot(title=self._format_plot_title(title))
             _style_plot(plot)
-            plot.setLabel("bottom", "Generation")
-            plot.setLabel("left", y_label)
+            self._register_plot_theme(plot, bottom_text="Generation", left_text=y_label, title_text=title)
             setattr(self, attr_name, plot)
             if idx % 2 == 1:
                 self.agent_generation_area.nextRow()
@@ -2063,6 +2927,158 @@ class CommandCenter(QMainWindow):
         )
         self.comparison_status_label.setText("Comparison cleared.")
         self._clear_comparison_plots()
+        if self._last_payload is not None:
+            self._populate_sql_tab(self._last_payload.get("sql_objects", {}))
+
+    def _apply_sweep_defaults(self, sweep_name):
+        defaults = SWEEP_DEFAULTS.get(sweep_name, SWEEP_DEFAULTS["population"])
+        self.sweep_total_agents_input.setText(str(defaults["total_agents"]))
+        self.sweep_generations_input.setText(str(defaults["n_generations"]))
+        self.sweep_rounds_input.setText(str(defaults["n_rounds"]))
+        self.sweep_fixed_drift_input.setText(str(defaults["fixed_drift"]))
+        self.sweep_fixed_volatility_input.setText(str(defaults["fixed_volatility"]))
+        self.sweep_population_values_input.setText(str(defaults["population_values"]))
+        self.sweep_drift_values_input.setText(str(defaults["drift_values"]))
+        self.sweep_volatility_values_input.setText(str(defaults["volatility_values"]))
+
+    def _collect_sweep_settings(self):
+        return {
+            "db_path": self.input_db_path.text().strip(),
+            "total_agents": int(self.sweep_total_agents_input.text().strip()),
+            "n_generations": int(self.sweep_generations_input.text().strip()),
+            "n_rounds": int(self.sweep_rounds_input.text().strip()),
+            "fixed_drift": float(self.sweep_fixed_drift_input.text().strip()),
+            "fixed_volatility": float(self.sweep_fixed_volatility_input.text().strip()),
+            "population_values": self.sweep_population_values_input.text().strip(),
+            "drift_values": self.sweep_drift_values_input.text().strip(),
+            "volatility_values": self.sweep_volatility_values_input.text().strip(),
+        }
+
+    def run_sweep_comparison(self):
+        if self.sweep_compare_worker is not None:
+            QMessageBox.information(self, "Sweep In Progress", "A sweep comparison is already running.")
+            return
+        if self.run_worker is not None:
+            QMessageBox.information(
+                self,
+                "Run In Progress",
+                "Please wait for the current run to finish before starting a sweep comparison.",
+            )
+            return
+
+        try:
+            sweep_name = self.combo_sweep_type.currentText().strip()
+            sweep_settings = self._collect_sweep_settings()
+            if not sweep_settings["db_path"]:
+                raise ValueError("Please provide a DuckDB file path before running a sweep.")
+            _build_sweep_run_args(sweep_name, sweep_settings)
+        except Exception as exc:
+            QMessageBox.warning(self, "Invalid Sweep Settings", str(exc))
+            return
+
+        self._comparison_sweep_payload = {
+            "sweep_name": sweep_name,
+            "sweep_title": _build_sweep_title(sweep_name, sweep_settings),
+            "settings": sweep_settings,
+            "runs": [],
+        }
+        self._update_sweep_summary(self._comparison_sweep_payload)
+        self._update_sweep_comparison_plots([])
+        self.btn_run_sweep_comparison.setEnabled(False)
+        self.btn_stop_run.setEnabled(True)
+        self.sweep_status_label.setText("Launching sweep comparison...")
+        self.sweep_compare_worker = SweepComparisonWorker(sweep_name, sweep_settings)
+        self.sweep_compare_worker.progress.connect(self._handle_sweep_progress)
+        self.sweep_compare_worker.completed.connect(self._apply_sweep_comparison_payload)
+        self.sweep_compare_worker.error.connect(self._show_sweep_error)
+        self.sweep_compare_worker.finished.connect(self._sweep_worker_finished)
+        self.sweep_compare_worker.start()
+
+    def clear_sweep_comparison(self):
+        self._comparison_sweep_payload = None
+        self._comparison_sweep_legend_items = []
+        self.sweep_summary_label.setText(
+            "No sweep comparison loaded. Configure a sweep from the left panel."
+        )
+        self.sweep_status_label.setText("Sweep comparison cleared.")
+        self._clear_sweep_comparison_plots()
+
+    def _handle_sweep_progress(self, payload):
+        event = payload.get("event")
+        if event == "sweep_started":
+            self._comparison_sweep_payload = {
+                "sweep_name": payload["sweep_name"],
+                "sweep_title": payload["sweep_title"],
+                "settings": dict(self._collect_sweep_settings()),
+                "runs": [],
+            }
+            self._update_sweep_summary(self._comparison_sweep_payload)
+            self.sweep_status_label.setText(
+                f"Running {payload['sweep_name']} sweep across {payload['total_runs']} run(s)..."
+            )
+        elif event == "sweep_run_started":
+            self.sweep_status_label.setText(
+                f"Running sweep {payload['run_index']} of {payload['total_runs']}: {payload['run_label']}"
+            )
+        elif event == "generation_started":
+            self.sweep_status_label.setText(
+                f"Sweep run {payload['run_index']} of {payload['total_runs']} | "
+                f"{payload['run_label']} generation {payload['generation_id']} of {payload['n_generations']}..."
+            )
+        elif event == "generation_completed":
+            run_index = int(payload["run_index"]) - 1
+            live_df = _prepare_sweep_plot_dataframe(
+                payload.get("live_generation_df", pd.DataFrame()).copy()
+            )
+            while len(self._comparison_sweep_payload["runs"]) <= run_index:
+                self._comparison_sweep_payload["runs"].append({})
+            self._comparison_sweep_payload["runs"][run_index] = {
+                "label": payload["run_label"],
+                "experiment_id": payload.get("experiment_id"),
+                "data": live_df,
+            }
+            self._update_sweep_summary(self._comparison_sweep_payload)
+            self._update_sweep_comparison_plots(self._comparison_sweep_payload["runs"])
+            self.sweep_status_label.setText(
+                f"Sweep run {payload['run_index']} of {payload['total_runs']} | "
+                f"{payload['run_label']} completed generation {payload['generation_id']} of {payload['n_generations']}."
+            )
+        elif event == "sweep_run_completed":
+            run_index = int(payload["run_index"]) - 1
+            while len(self._comparison_sweep_payload["runs"]) <= run_index:
+                self._comparison_sweep_payload["runs"].append({})
+            self._comparison_sweep_payload["runs"][run_index] = {
+                "label": payload["run_label"],
+                "experiment_id": payload.get("experiment_id"),
+                "data": _prepare_sweep_plot_dataframe(
+                    payload.get("data", pd.DataFrame()).copy()
+                ),
+            }
+            self._update_sweep_summary(self._comparison_sweep_payload)
+            self._update_sweep_comparison_plots(self._comparison_sweep_payload["runs"])
+            self.sweep_status_label.setText(
+                f"Sweep progress: {payload['completed_runs']}/{payload['total_runs']} completed "
+                f"({payload['run_label']})."
+            )
+
+    def _apply_sweep_comparison_payload(self, payload):
+        self._comparison_sweep_payload = payload
+        self._update_sweep_summary(payload)
+        self._update_sweep_comparison_plots(payload.get("runs", []))
+        self._save_sweep_comparison_exports(payload.get("sweep_name", "sweep"))
+        self.tabs.setCurrentWidget(self.comparison_tab)
+        self.sweep_status_label.setText("Sweep comparison finished, saved to DuckDB, and exported to comparison_outputs.")
+        self.refresh_data()
+
+    def _show_sweep_error(self, message):
+        self.sweep_status_label.setText("Sweep comparison failed.")
+        QMessageBox.critical(self, "Sweep Comparison Error", message)
+
+    def _sweep_worker_finished(self):
+        self.btn_run_sweep_comparison.setEnabled(True)
+        if self.run_worker is None:
+            self.btn_stop_run.setEnabled(False)
+        self.sweep_compare_worker = None
 
     def _comparison_worker_finished(self):
         self.btn_compare_runs.setEnabled(True)
@@ -2076,66 +3092,23 @@ class CommandCenter(QMainWindow):
         self._comparison_payload = payload
         experiments_df = payload.get("experiments", pd.DataFrame())
         comparison_df = payload.get("comparison_metrics", pd.DataFrame())
+        comparison_runs = _comparison_payload_to_runs(experiments_df, comparison_df)
         self._update_comparison_summary(experiments_df, comparison_df)
         self._update_comparison_plots(comparison_df, experiments_df)
+        self._update_sweep_summary(
+            {
+                "sweep_title": "Selected Run Comparison",
+                "runs": comparison_runs,
+                "settings": {},
+            }
+        )
+        self._update_sweep_comparison_plots(comparison_runs)
+        self._populate_sql_tab(payload.get("sql_objects", {}))
         self.tabs.setCurrentWidget(self.comparison_tab)
         self.comparison_status_label.setText("Comparison loaded.")
 
-    def browse_batch_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Batch Parameter File",
-            "",
-            "Text Files (*.txt);;All Files (*)",
-        )
-        if file_path:
-            self.batch_file_input.setText(file_path)
-
-    def start_batch_run(self):
-        if self.run_worker is not None or self.batch_run_worker is not None:
-            QMessageBox.information(self, "Run In Progress", "A run is already in progress.")
-            return
-        if self.worker is not None:
-            QMessageBox.information(
-                self,
-                "Database Busy",
-                "Please wait for the current database refresh to finish before starting a batch run.",
-            )
-            return
-
-        file_path = self.batch_file_input.text().strip()
-        if not file_path:
-            QMessageBox.warning(self, "Missing Batch File", "Please choose a .txt parameter file.")
-            return
-
-        try:
-            config_batch = _load_batch_run_configs(
-                file_path=file_path,
-                default_db_path=self.input_db_path.text().strip(),
-            )
-        except Exception as exc:
-            QMessageBox.warning(self, "Invalid Batch File", str(exc))
-            return
-
-        self._reset_live_run_state()
-        self.tabs.setCurrentWidget(self.dashboard_tab)
-        self.btn_start_run.setEnabled(False)
-        self.btn_start_batch_run.setEnabled(False)
-        self.run_status_label.setText(
-            f"Starting batch run with {len(config_batch)} configuration(s)..."
-        )
-
-        self.batch_run_worker = BatchExperimentRunnerWorker(config_batch)
-        self.batch_run_worker.progress.connect(self._handle_run_progress)
-        self.batch_run_worker.completed.connect(self._handle_batch_run_completed)
-        self.batch_run_worker.error.connect(self._handle_run_error)
-        self.batch_run_worker.finished.connect(self._batch_run_worker_finished)
-        self.batch_run_worker.start()
-
-        self.btn_stop_run.setEnabled(True)
-
     def start_new_run(self):
-        if self.run_worker is not None or self.batch_run_worker is not None:
+        if self.run_worker is not None:
             QMessageBox.information(self, "Run In Progress", "A run is already in progress.")
             return
         if self.worker is not None:
@@ -2175,7 +3148,6 @@ class CommandCenter(QMainWindow):
         self.tabs.setCurrentWidget(self.dashboard_tab)
 
         self.btn_start_run.setEnabled(False)
-        self.btn_start_batch_run.setEnabled(False)
         self.run_status_label.setText("Starting experiment...")
 
         self.run_worker = ExperimentRunnerWorker(config_overrides)
@@ -2193,15 +3165,8 @@ class CommandCenter(QMainWindow):
 
     def _run_worker_finished(self):
         self.btn_start_run.setEnabled(True)
-        self.btn_start_batch_run.setEnabled(True)
         self.btn_stop_run.setEnabled(False)
         self.run_worker = None
-
-    def _batch_run_worker_finished(self):
-        self.btn_start_run.setEnabled(True)
-        self.btn_start_batch_run.setEnabled(True)
-        self.btn_stop_run.setEnabled(False)
-        self.batch_run_worker = None
 
     def _show_error(self, message):
         self.status_label.setText("Load failed.")
@@ -2215,30 +3180,10 @@ class CommandCenter(QMainWindow):
 
     def _handle_run_progress(self, payload):
         event = payload.get("event")
-        if event == "batch_started":
-            self.run_status_label.setText(
-                f"Batch started: {payload['total_runs']} run(s) queued."
-            )
-            return
-
-        if event == "batch_run_started":
-            self._reset_live_run_state()
-            self.run_status_label.setText(
-                f"Starting batch run {payload['run_index']} of {payload['total_runs']}: "
-                f"{payload['run_name']}"
-            )
-            return
-
-        batch_prefix = ""
-        if "batch_run_index" in payload and "batch_total_runs" in payload:
-            batch_prefix = (
-                f"Batch run {payload['batch_run_index']} of {payload['batch_total_runs']} | "
-            )
-
         if event == "generation_started":
             self._current_experiment_id = payload.get("experiment_id")
             self.run_status_label.setText(
-                f"{batch_prefix}Running generation {payload['generation_id']} "
+                f"Running generation {payload['generation_id']} "
                 f"of {payload['n_generations']}..."
             )
             return
@@ -2313,7 +3258,7 @@ class CommandCenter(QMainWindow):
                 )
 
             self.run_status_label.setText(
-                f"{batch_prefix}Completed generation {payload['generation_id']} "
+                f"Completed generation {payload['generation_id']} "
                 f"of {payload['n_generations']}."
             )
             self.summary_label.setText(
@@ -2327,16 +3272,9 @@ class CommandCenter(QMainWindow):
             )
             return
 
-        if event == "batch_run_completed":
-            self.run_status_label.setText(
-                f"Completed batch run {payload['run_index']} of {payload['total_runs']}: "
-                f"{payload['run_name']}"
-            )
-            return
-
         if event == "experiment_completed":
             self.run_status_label.setText(
-                f"{batch_prefix}Experiment {payload['experiment_id']} completed."
+                f"Experiment {payload['experiment_id']} completed."
             )
 
     def _handle_run_completed(self, result):
@@ -2347,26 +3285,15 @@ class CommandCenter(QMainWindow):
         )
         self.refresh_data()
 
-    def _handle_batch_run_completed(self, result):
-        total_runs = int(result.get("total_runs", 0))
-        completed_runs = result.get("runs", [])
-        if completed_runs:
-            self._current_experiment_id = completed_runs[-1]["experiment_id"]
-            self._current_generation_id = None
-        self.run_status_label.setText(
-            f"Finished batch run file. Completed {total_runs} experiment(s)."
-        )
-        self.refresh_data()
-
     def stop_run(self):
         if self.run_worker is not None:
             self.run_worker.terminate()
             self.run_status_label.setText("Run stopped by user.")
             self.btn_stop_run.setEnabled(False)
             return
-        if self.batch_run_worker is not None:
-            self.batch_run_worker.terminate()
-            self.run_status_label.setText("Batch run stopped by user.")
+        if self.sweep_compare_worker is not None:
+            self.sweep_compare_worker.terminate()
+            self.sweep_status_label.setText("Sweep comparison stopped by user.")
             self.btn_stop_run.setEnabled(False)
 
     def _handle_run_error(self, message):
@@ -2456,7 +3383,10 @@ class CommandCenter(QMainWindow):
         )
         self._update_microstructure_tab(payload)
 
-        self.status_label.setText("Loaded data from DuckDB.")
+        if payload.get("database_created"):
+            self.status_label.setText("Created a new DuckDB database and loaded it.")
+        else:
+            self.status_label.setText("Loaded data from DuckDB.")
 
     def _populate_experiment_combo(self, experiments_df):
         self._suppress_selection_signals = True
@@ -2609,9 +3539,10 @@ class CommandCenter(QMainWindow):
         self._refresh_plots_only()
 
     def _format_plot_title(self, base_title):
+        math_note = _resolve_plot_math_note(base_title)
         return (
-            f"<span style='color: {GRAPH_FOREGROUND};'>"
-            f"{base_title} | smoothing {self.smoothing_window}"
+            f"<span style='color: {self._theme['plot_foreground']};'>"
+            f"{base_title} | {math_note} | smoothing {self.smoothing_window}"
             f"</span>"
         )
 
@@ -2649,6 +3580,12 @@ class CommandCenter(QMainWindow):
             plot.setTitle(self._format_plot_title(self.comparison_plot_titles[metric_key]))
         for metric_key, plot in self.comparison_wealth_plots.items():
             plot.setTitle(self._format_plot_title(self.comparison_plot_titles[metric_key]))
+        for metric_key, plot in self.sweep_param_plots.items():
+            plot.setTitle(self._format_plot_title(self.sweep_plot_titles[metric_key]))
+        for metric_key, plot in self.sweep_diversity_plots.items():
+            plot.setTitle(self._format_plot_title(self.sweep_plot_titles[metric_key]))
+        for metric_key, plot in self.sweep_wealth_plots.items():
+            plot.setTitle(self._format_plot_title(self.sweep_plot_titles[metric_key]))
 
     def _smooth_series(self, values):
         if self.smoothing_window <= 1:
@@ -2670,6 +3607,11 @@ class CommandCenter(QMainWindow):
                 self._update_comparison_plots(
                     self._comparison_payload.get("comparison_metrics", pd.DataFrame()),
                     self._comparison_payload.get("experiments", pd.DataFrame()),
+                )
+            if self._comparison_sweep_payload is not None:
+                self._update_all_plot_titles()
+                self._update_sweep_comparison_plots(
+                    self._comparison_sweep_payload.get("runs", []),
                 )
             return
         self._update_all_plot_titles()
@@ -2730,6 +3672,10 @@ class CommandCenter(QMainWindow):
             self._update_comparison_plots(
                 self._comparison_payload.get("comparison_metrics", pd.DataFrame()),
                 self._comparison_payload.get("experiments", pd.DataFrame()),
+            )
+        if self._comparison_sweep_payload is not None:
+            self._update_sweep_comparison_plots(
+                self._comparison_sweep_payload.get("runs", []),
             )
 
     def _update_summary(self, payload):
@@ -3195,7 +4141,7 @@ class CommandCenter(QMainWindow):
                 if pd.notna(round_row.get("p_t")):
                     self.micro_lob_plot.addLine(
                         x=float(round_row["p_t"]),
-                        pen=pg.mkPen((255, 255, 255), width=2, style=Qt.DashLine),
+                        pen=pg.mkPen(self._theme["plot_outline"], width=2, style=Qt.DashLine),
                     )
 
         self.micro_lob_plot.setTitle(
@@ -3346,7 +4292,7 @@ class CommandCenter(QMainWindow):
                 outline_color = (220, 20, 60)
                 outline_width = 3
             else:
-                outline_color = (255, 255, 255)
+                outline_color = self._theme["plot_outline"]
                 outline_width = 1
             scatter_points.append(
                 {
@@ -3357,7 +4303,7 @@ class CommandCenter(QMainWindow):
             )
             label = pg.TextItem(
                 text=str(agent_id),
-                color=GRAPH_FOREGROUND,
+                color=self._theme["plot_foreground"],
                 anchor=(0.5, -0.4),
             )
             label.setPos(x_pos, y_pos)
@@ -3371,7 +4317,11 @@ class CommandCenter(QMainWindow):
         sell_label = pg.TextItem(text="Seller outline", color=(220, 20, 60), anchor=(0, 0))
         sell_label.setPos(-radius, legend_y + 1.6)
         self.micro_network_plot.addItem(sell_label)
-        flow_label = pg.TextItem(text="Green line to red line + red arrow: buyer -> seller", color=GRAPH_FOREGROUND, anchor=(0, 0))
+        flow_label = pg.TextItem(
+            text="Green line to red line + red arrow: buyer -> seller",
+            color=self._theme["plot_foreground"],
+            anchor=(0, 0),
+        )
         flow_label.setPos(-radius, legend_y + 3.2)
         self.micro_network_plot.addItem(flow_label)
         self.micro_network_plot.enableAutoRange()
@@ -3441,14 +4391,42 @@ class CommandCenter(QMainWindow):
         for metric_key, plot in self.comparison_param_plots.items():
             plot.clear()
             plot.setTitle(self._format_plot_title(self.comparison_plot_titles[metric_key]))
-            plot.setLabel("bottom", "Generation")
+            self._apply_theme_to_plot(plot)
         for metric_key, plot in self.comparison_wealth_plots.items():
             plot.clear()
-            plot.addLine(y=0, pen=pg.mkPen((255, 255, 255, 100), width=1, style=Qt.DashLine))
+            self._comparison_zero_lines[metric_key] = plot.addLine(
+                y=0,
+                pen=pg.mkPen(self._theme["plot_reference"], width=1, style=Qt.DashLine),
+            )
             plot.setTitle(self._format_plot_title(self.comparison_plot_titles[metric_key]))
-            plot.setLabel("bottom", "Generation")
-        self.comparison_param_runs_label.setText("No runs selected.")
-        self.comparison_wealth_runs_label.setText("No runs selected.")
+            self._apply_theme_to_plot(plot)
+        self._comparison_legend_items = []
+        empty_labels = _format_run_label_html([], text_color=self._theme["plot_foreground"])
+        self.comparison_param_runs_label.setText(empty_labels)
+        self.comparison_wealth_runs_label.setText(empty_labels)
+
+    def _clear_sweep_comparison_plots(self):
+        for metric_key, plot in self.sweep_param_plots.items():
+            plot.clear()
+            plot.setTitle(self._format_plot_title(self.sweep_plot_titles[metric_key]))
+            self._apply_theme_to_plot(plot)
+        for metric_key, plot in self.sweep_diversity_plots.items():
+            plot.clear()
+            plot.setTitle(self._format_plot_title(self.sweep_plot_titles[metric_key]))
+            self._apply_theme_to_plot(plot)
+        for metric_key, plot in self.sweep_wealth_plots.items():
+            plot.clear()
+            plot.addLine(
+                y=0,
+                pen=pg.mkPen(self._theme["plot_reference"], width=1, style=Qt.DashLine),
+            )
+            plot.setTitle(self._format_plot_title(self.sweep_plot_titles[metric_key]))
+            self._apply_theme_to_plot(plot)
+        self._comparison_sweep_legend_items = []
+        empty_labels = _format_run_label_html([], text_color=self._theme["plot_foreground"])
+        self.sweep_param_runs_label.setText(empty_labels)
+        self.sweep_diversity_runs_label.setText(empty_labels)
+        self.sweep_wealth_runs_label.setText(empty_labels)
 
     def _update_comparison_summary(self, experiments_df, comparison_df):
         if experiments_df.empty:
@@ -3478,10 +4456,50 @@ class CommandCenter(QMainWindow):
             )
         )
 
+    def _update_sweep_summary(self, payload):
+        runs = payload.get("runs", [])
+        settings = payload.get("settings", {})
+        if not runs:
+            self.sweep_summary_label.setText("No sweep comparison data available.")
+            return
+
+        generation_min = None
+        generation_max = None
+        run_labels = []
+        for run in runs:
+            run_labels.append(str(run.get("label", "Unknown run")))
+            run_df = run.get("data", pd.DataFrame())
+            if run_df.empty or "generation" not in run_df.columns:
+                continue
+            run_min = int(run_df["generation"].min())
+            run_max = int(run_df["generation"].max())
+            generation_min = run_min if generation_min is None else min(generation_min, run_min)
+            generation_max = run_max if generation_max is None else max(generation_max, run_max)
+
+        generation_summary = "Generations loaded: unavailable"
+        if generation_min is not None and generation_max is not None:
+            generation_summary = f"Generations loaded: {generation_min} to {generation_max}"
+
+        self.sweep_summary_label.setText(
+            "\n".join(
+                [
+                    f"Sweep: {payload.get('sweep_title', payload.get('sweep_name', 'unknown'))}",
+                    f"Runs executed: {len(runs)}",
+                    generation_summary,
+                    f"Settings: gens={settings.get('n_generations')} | rounds={settings.get('n_rounds')} | total agents={settings.get('total_agents')}",
+                    "Runs:",
+                    *run_labels,
+                ]
+            )
+        )
+
     def _update_comparison_plots(self, comparison_df, experiments_df):
         self._clear_comparison_plots()
         if comparison_df.empty or experiments_df.empty:
             return
+
+        param_df = comparison_df.sort_values(["experiment_id", "generation_id"]).reset_index(drop=True)
+        wealth_df = param_df
 
         labels_by_id = {
             str(row["experiment_id"]): f"{row['experiment_name']} | {str(row['experiment_id'])[:8]}"
@@ -3489,10 +4507,10 @@ class CommandCenter(QMainWindow):
         }
         legend_items = []
 
-        for run_idx, (experiment_id, run_df) in enumerate(
-            comparison_df.groupby("experiment_id", sort=False)
-        ):
-            color = COMPARISON_LINE_COLORS[run_idx % len(COMPARISON_LINE_COLORS)]
+        run_groups = list(param_df.groupby("experiment_id", sort=False))
+        gradient_colors = _sweep_colors(len(run_groups))
+        for run_idx, (experiment_id, run_df) in enumerate(run_groups):
+            color = gradient_colors[run_idx % len(gradient_colors)]
             transparent_color = QColor(*color)
             transparent_color.setAlpha(70)
             run_df = run_df.sort_values("generation_id")
@@ -3519,33 +4537,159 @@ class CommandCenter(QMainWindow):
                     connect="finite",
                 )
 
-            if WEALTH_INFORMED_COL in run_df.columns and WEALTH_ZI_COL in run_df.columns:
+            wealth_run_df = wealth_df[wealth_df["experiment_id"] == experiment_id].sort_values("generation_id")
+            if WEALTH_INFORMED_COL in wealth_run_df.columns and WEALTH_ZI_COL in wealth_run_df.columns:
                 diff_values = (
-                    run_df[WEALTH_INFORMED_COL].astype(float) - run_df[WEALTH_ZI_COL].astype(float)
+                    wealth_run_df[WEALTH_INFORMED_COL].astype(float)
+                    - wealth_run_df[WEALTH_ZI_COL].astype(float)
                 ).tolist()
+                wealth_x = wealth_run_df["generation_id"].tolist()
                 wealth_plot = self.comparison_wealth_plots[COMPARISON_WEALTH_DIFF_SPEC[0]]
                 wealth_plot.plot(
-                    x=x,
+                    x=wealth_x,
                     y=diff_values,
                     pen=pg.mkPen(transparent_color, width=1),
                     name=None,
                     connect="finite",
                 )
                 wealth_plot.plot(
-                    x=x,
+                    x=wealth_x,
                     y=self._smooth_series(diff_values),
                     pen=pg.mkPen(color, width=3),
                     name=label,
                     connect="finite",
                 )
 
-        labels_html = _format_run_label_html(legend_items)
+        self._comparison_legend_items = legend_items
+        labels_html = _format_run_label_html(
+            legend_items,
+            text_color=self._theme["plot_foreground"],
+        )
         self.comparison_param_runs_label.setText(labels_html)
         self.comparison_wealth_runs_label.setText(labels_html)
 
+    def _update_sweep_comparison_plots(self, runs):
+        self._clear_sweep_comparison_plots()
+        if not runs:
+            return
+
+        param_runs = []
+        for run in runs:
+            if not run:
+                param_runs.append(run)
+                continue
+            run_df = run.get("data", pd.DataFrame())
+            if run_df.empty or "generation" not in run_df.columns:
+                param_runs.append(run)
+                continue
+            param_runs.append(
+                dict(run, data=run_df.sort_values("generation").reset_index(drop=True))
+            )
+        diversity_runs = param_runs
+        wealth_runs = param_runs
+        active_run_count = len([run for run in param_runs if run])
+        colors = _sweep_colors(active_run_count)
+        legend_items = []
+        color_index = 0
+        for run_index, run in enumerate(param_runs):
+            if not run:
+                continue
+            label = str(run.get("label", f"Run {run_index + 1}"))
+            run_df = run.get("data", pd.DataFrame())
+            if run_df.empty or "generation" not in run_df.columns:
+                continue
+
+            run_df = run_df.sort_values("generation")
+            x = run_df["generation"].astype(int).tolist()
+            color = colors[color_index % len(colors)]
+            color_index += 1
+            transparent_color = QColor(*color)
+            transparent_color.setAlpha(45)
+            legend_items.append((label, color))
+
+            for metric_key, _ in SWEEP_PARAM_SUBPLOTS:
+                if metric_key not in run_df.columns:
+                    continue
+                values = run_df[metric_key].astype(float).tolist()
+                self.sweep_param_plots[metric_key].plot(
+                    x=x,
+                    y=values,
+                    pen=pg.mkPen(transparent_color, width=1),
+                    connect="finite",
+                )
+                self.sweep_param_plots[metric_key].plot(
+                    x=x,
+                    y=self._smooth_series(values),
+                    pen=pg.mkPen(color, width=3),
+                    connect="finite",
+                )
+
+            diversity_run_df = diversity_runs[run_index].get("data", pd.DataFrame()) if run_index < len(diversity_runs) else pd.DataFrame()
+            for metric_key, _ in SWEEP_STD_SUBPLOTS:
+                if diversity_run_df.empty or metric_key not in diversity_run_df.columns:
+                    continue
+                values = diversity_run_df[metric_key].astype(float).tolist()
+                diversity_x = diversity_run_df["generation"].astype(int).tolist()
+                self.sweep_diversity_plots[metric_key].plot(
+                    x=diversity_x,
+                    y=values,
+                    pen=pg.mkPen(transparent_color, width=1),
+                    connect="finite",
+                )
+                self.sweep_diversity_plots[metric_key].plot(
+                    x=diversity_x,
+                    y=self._smooth_series(values),
+                    pen=pg.mkPen(color, width=3),
+                    connect="finite",
+                )
+
+            wealth_run_df = wealth_runs[run_index].get("data", pd.DataFrame()) if run_index < len(wealth_runs) else pd.DataFrame()
+            if not wealth_run_df.empty and WEALTH_INFORMED_COL in wealth_run_df.columns and WEALTH_ZI_COL in wealth_run_df.columns:
+                diff_values = (
+                    wealth_run_df[WEALTH_INFORMED_COL].astype(float)
+                    - wealth_run_df[WEALTH_ZI_COL].astype(float)
+                ).tolist()
+                wealth_x = wealth_run_df["generation"].astype(int).tolist()
+                wealth_plot = self.sweep_wealth_plots[COMPARISON_WEALTH_DIFF_SPEC[0]]
+                wealth_plot.plot(
+                    x=wealth_x,
+                    y=self._smooth_series(diff_values),
+                    pen=pg.mkPen(color, width=3),
+                    connect="finite",
+                )
+
+        self._comparison_sweep_legend_items = legend_items
+        labels_html = _format_run_label_html(
+            legend_items,
+            text_color=self._theme["plot_foreground"],
+        )
+        self.sweep_param_runs_label.setText(labels_html)
+        self.sweep_diversity_runs_label.setText(labels_html)
+        self.sweep_wealth_runs_label.setText(labels_html)
+
+    def _save_sweep_comparison_exports(self, sweep_name):
+        SWEEP_COMPARISON_OUTPUT_DIR.mkdir(exist_ok=True)
+        exports = [
+            (self.sweep_param_area, SWEEP_COMPARISON_OUTPUT_DIR / f"{sweep_name}_params.png"),
+            (self.sweep_diversity_area, SWEEP_COMPARISON_OUTPUT_DIR / f"{sweep_name}_diversity.png"),
+            (self.sweep_wealth_area, SWEEP_COMPARISON_OUTPUT_DIR / f"{sweep_name}_wealth.png"),
+        ]
+        for widget, path in exports:
+            widget.grab().save(str(path), "PNG")
+
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = CommandCenter()
-    window.show()
-    sys.exit(app.exec())
+    print("[gui] starting application")
+    try:
+        app = QApplication(sys.argv)
+        print("[gui] QApplication created")
+        window = CommandCenter()
+        print("[gui] CommandCenter created")
+        window.show()
+        print("[gui] window shown")
+        exit_code = app.exec()
+        print(f"[gui] event loop exited with code {exit_code}")
+        sys.exit(exit_code)
+    except Exception as exc:
+        print(f"[gui] startup failed: {exc}")
+        raise
