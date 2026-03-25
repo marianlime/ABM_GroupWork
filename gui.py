@@ -179,9 +179,7 @@ class DatabaseLoaderWorker(QThread):
                         creation_time,
                         completion_time,
                         mean_qty_aggression,
-                        mean_signal_aggression,
-                        mean_threshold,
-                        mean_signal_clip
+                        mean_signal_aggression
                     FROM generations
                     WHERE experiment_id = ?
                     ORDER BY generation_id
@@ -306,9 +304,7 @@ class DatabaseLoaderWorker(QThread):
                         agent_id,
                         strategy_type,
                         qty_aggression,
-                        signal_aggression,
-                        threshold,
-                        signal_clip
+                        signal_aggression
                     FROM agent_population
                     WHERE experiment_id = ?
                       AND strategy_type = 'parameterised_informed'
@@ -410,8 +406,6 @@ class DatabaseLoaderWorker(QThread):
                         info_param,
                         qty_aggression,
                         signal_aggression,
-                        threshold,
-                        signal_clip,
                         group_label,
                         initial_cash,
                         initial_shares
@@ -840,9 +834,7 @@ class ComparisonLoaderWorker(QThread):
                     experiment_id,
                     generation_id,
                     mean_qty_aggression,
-                    mean_signal_aggression,
-                    mean_threshold,
-                    mean_signal_clip
+                    mean_signal_aggression
                 FROM generations
                 WHERE experiment_id IN ({experiment_ids_sql})
                 ORDER BY experiment_id, generation_id
@@ -1206,15 +1198,11 @@ class CommandCenter(QMainWindow):
             [
                 ("Qty Aggression", (255, 140, 0)),
                 ("Signal Aggression", (70, 130, 180)),
-                ("Threshold", (220, 20, 60)),
-                ("Signal Clip", (46, 139, 87)),
             ],
         )
         self.plot_params.setLabel("left", "Mean Parameter Value")
         self.line_qty = self.plot_params.plot(pen=pg.mkPen((255, 140, 0), width=3), name="Qty Aggression")
         self.line_signal = self.plot_params.plot(pen=pg.mkPen((70, 130, 180), width=3), name="Signal Aggression")
-        self.line_threshold = self.plot_params.plot(pen=pg.mkPen((220, 20, 60), width=3), name="Threshold")
-        self.line_clip = self.plot_params.plot(pen=pg.mkPen((46, 139, 87), width=3), name="Signal Clip")
 
         self.graph_area.nextRow()
 
@@ -1547,8 +1535,6 @@ class CommandCenter(QMainWindow):
             ("agent_info_param_plot", "Info_Param per Agent", "Info_Param"),
             ("agent_qty_aggression_plot", "Qty_Aggression per Agent", "Qty_Aggression"),
             ("agent_signal_aggression_plot", "Signal_Aggression per Agent", "Signal_Aggression"),
-            ("agent_threshold_plot", "Threshold per Agent", "Threshold"),
-            ("agent_signal_clip_plot", "Signal_Clip per Agent", "Signal_Clip"),
         ]
         self.agent_info_param_plot = self.agent_generation_area.addPlot(
             title=self._format_plot_title(generation_line_specs[0][1])
@@ -1754,8 +1740,6 @@ class CommandCenter(QMainWindow):
                 "generation_id",
                 "mean_qty_aggression",
                 "mean_signal_aggression",
-                "mean_threshold",
-                "mean_signal_clip",
                 "mean_info_param_parameterised_informed",
                 "mean_info_param_zi",
                 "mean_wealth_parameterised_informed",
@@ -1957,16 +1941,6 @@ class CommandCenter(QMainWindow):
             "signal_aggression",
             self.agent_signal_aggression_plot,
         )
-        self._update_agent_generation_param_plot(
-            payload["agent_strategy_param_history"],
-            "threshold",
-            self.agent_threshold_plot,
-        )
-        self._update_agent_generation_param_plot(
-            payload["agent_strategy_param_history"],
-            "signal_clip",
-            self.agent_signal_clip_plot,
-        )
         self._update_agent_metric_plot(payload["agent_profit_loss"], "profit_loss")
         self._update_agent_metric_plot(payload["agent_fill_rate"], "fill_rate")
         self._update_agent_metric_plot(payload["agent_inventory_risk"], "inventory_risk")
@@ -2167,12 +2141,6 @@ class CommandCenter(QMainWindow):
         self.agent_signal_aggression_plot.setTitle(
             self._format_plot_title("Signal_Aggression per Agent")
         )
-        self.agent_threshold_plot.setTitle(
-            self._format_plot_title("Threshold per Agent")
-        )
-        self.agent_signal_clip_plot.setTitle(
-            self._format_plot_title("Signal_Clip per Agent")
-        )
         for plot, base_title in self.agent_round_plots.values():
             plot.setTitle(self._format_plot_title(base_title))
         for metric_key, plot in self.comparison_param_plots.items():
@@ -2238,16 +2206,6 @@ class CommandCenter(QMainWindow):
             "signal_aggression",
             self.agent_signal_aggression_plot,
         )
-        self._update_agent_generation_param_plot(
-            self._last_payload["agent_strategy_param_history"],
-            "threshold",
-            self.agent_threshold_plot,
-        )
-        self._update_agent_generation_param_plot(
-            self._last_payload["agent_strategy_param_history"],
-            "signal_clip",
-            self.agent_signal_clip_plot,
-        )
         self._update_agent_metric_plot(self._last_payload["agent_profit_loss"], "profit_loss")
         self._update_agent_metric_plot(self._last_payload["agent_fill_rate"], "fill_rate")
         self._update_agent_metric_plot(self._last_payload["agent_inventory_risk"], "inventory_risk")
@@ -2311,15 +2269,11 @@ class CommandCenter(QMainWindow):
         if generations_df.empty or not self._is_strategy_visible("parameterised_informed"):
             self.line_qty.setData([], [])
             self.line_signal.setData([], [])
-            self.line_threshold.setData([], [])
-            self.line_clip.setData([], [])
             return
 
         x = generations_df["generation_id"].tolist()
         self.line_qty.setData(x, self._smooth_series(generations_df["mean_qty_aggression"].tolist()))
         self.line_signal.setData(x, self._smooth_series(generations_df["mean_signal_aggression"].tolist()))
-        self.line_threshold.setData(x, self._smooth_series(generations_df["mean_threshold"].tolist()))
-        self.line_clip.setData(x, self._smooth_series(generations_df["mean_signal_clip"].tolist()))
 
     def _update_wealth_plot(self, wealth_history_df):
         if wealth_history_df.empty:

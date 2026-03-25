@@ -20,17 +20,16 @@ Usage
 Output: PNG files saved to COMPARISON_OUTPUT_DIR, plus interactive windows.
 """
 
-from copy import deepcopy
+import concurrent.futures
+import os
+import tempfile
 from pathlib import Path
 
-# analysis.py (imported via main) forces matplotlib.use("Agg") at module level.
-# Import project code first, then switch to an interactive backend.
 import pandas as pd
-from constants import COMPARISON_PARAM_SPECS, WEALTH_INFORMED_COL, WEALTH_ZI_COL
-from main import run_experiment, DEFAULT_EXPERIMENT_CONFIG  # triggers analysis.py
+from constants import WEALTH_INFORMED_COL, WEALTH_ZI_COL
+from main import run_experiment  # triggers analysis.py (forces Agg backend)
 
 import matplotlib.pyplot as plt
-plt.switch_backend("TkAgg")   # change to "MacOSX" or "Qt5Agg" if TkAgg unavailable
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -44,23 +43,27 @@ ACTIVE_SWEEPS = [
 
 TOTAL_AGENTS  = 100
 N_GENERATIONS = 100
-N_ROUNDS      = 100
+N_ROUNDS      = 50
 SMOOTH_WINDOW = 20   # rolling-mean window in generations
 
 # Population sweep – (n_parameterised_agents, n_zi_agents) summing to TOTAL_AGENTS
 POPULATION_SWEEP = [
-    (20,  80),
+    (20, 80),
+    (30, 70),
+    (40, 60),
     (50,  50),
+    (60, 40),
+    (70, 30),
     (80,  20),
 ]
 
 # GBM drift sweep – volatility held at FIXED_VOLATILITY
-DRIFT_SWEEP      = [0.00, 0.05, 0.10]
-FIXED_VOLATILITY = 0.20
+DRIFT_SWEEP      = [-0.05, -0.01, 0.00, 0.01, 0.05, 0.10, 0.20]
+FIXED_VOLATILITY = 0.10
 
 # GBM volatility sweep – drift held at FIXED_DRIFT
-VOLATILITY_SWEEP = [0.10, 0.15, 0.20, 0.30]
-FIXED_DRIFT      = 0.05
+VOLATILITY_SWEEP = [0.00, 0.01, 0.05, 0.10, 0.20, 0.50]
+FIXED_DRIFT      = 0.02
 
 # Default population for GBM sweeps
 DEFAULT_N_INFORMED = TOTAL_AGENTS // 2
@@ -68,101 +71,156 @@ DEFAULT_N_ZI       = TOTAL_AGENTS - DEFAULT_N_INFORMED
 
 COMPARISON_OUTPUT_DIR = Path("comparison_outputs")
 
-# COMPARISON_PARAM_SPECS, WEALTH_INFORMED_COL, WEALTH_ZI_COL imported from constants.py
-# SMOOTH_WINDOW is set independently from analysis.py's _ROLL (10) — comparison plots
-# use a wider window because runs are longer and we want smoother trend lines.
-PARAMS = COMPARISON_PARAM_SPECS
+# Colourmap for run series – sequential gradient so intensity encodes the
+# swept variable (e.g. dark = low population, bright = high population).
+SWEEP_COLORMAP = "viridis"
+
+# Parameter subplot specs: (subplot_title, [(column, series_suffix_or_None), ...])
+#   Single-series subplot  → series_suffix is None  → legend shows run label only
+#   Multi-series subplot   → series_suffix is a short string appended to the run label
+#   Linestyles cycle: solid for the first series, dashed for the second.
+PARAM_SUBPLOTS = [
+    ("Qty Aggression",    [("mean_qty_aggression",                    None)]),
+    ("Signal Aggression", [("mean_signal_aggression",                 None)]),
+    ("Info Param (informed)", [("mean_info_param_parameterised_informed", None)]),
+]
+
+# Diversity subplot specs — mirrors PARAM_SUBPLOTS but tracks std dev over generations.
+STD_SUBPLOTS = [
+    ("Qty Aggression σ",    [("std_qty_aggression",                    None)]),
+    ("Signal Aggression σ", [("std_signal_aggression",                 None)]),
+    ("Info Param σ",        [("std_info_param_parameterised_informed", None)]),
+]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PARALLEL WORKER  (module-level so it is picklable by ProcessPoolExecutor)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _run_single_worker(args: tuple) -> tuple:
+    """
+    Worker function executed in a subprocess.
+
+    Each run writes to its own temporary DuckDB file to avoid write conflicts;
+    the file is deleted once the DataFrame has been extracted.  Comparison runs
+    are therefore not persisted to the main experiment_results.duckdb.
+    """
+    label, overrides = args
+    fd, tmp_db = tempfile.mkstemp(suffix=".duckdb", prefix="abm_comparison_")
+    os.close(fd)
+    os.unlink(tmp_db)  # remove the empty file so DuckDB can create a fresh DB at this path
+    try:
+        overrides = dict(overrides, db_path=tmp_db, experiment_name=label)
+        print(f"  [{label}] starting…", flush=True)
+        result = run_experiment(
+            config_overrides=overrides,
+            progress_callback=None,
+            run_analysis=False,
+        )
+        df = result["generation_counts_df"].reset_index(drop=True)
+        df["generation"] = df["generation"].astype(int)
+        print(f"  [{label}] done.", flush=True)
+        return (label, df)
+    finally:
+        try:
+            os.unlink(tmp_db)
+        except OSError:
+            pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _make_progress_callback(run_label: str, n_generations: int):
-    def callback(event: dict):
-        if event["event"] == "generation_completed":
-            gen = event["generation_index"] + 1
-            m   = event.get("generation_metrics", {})
-            print(
-                f"  [{run_label}] gen {gen:>3}/{n_generations}"
-                f"  qty_agg={m.get('mean_qty_aggression', float('nan')):.3f}"
-                f"  sig_agg={m.get('mean_signal_aggression', float('nan')):.3f}"
-                f"  thr={m.get('mean_threshold', float('nan')):.3f}"
-                f"  clip={m.get('mean_signal_clip', float('nan')):.3f}"
-                f"  info={m.get('mean_info_param_parameterised_informed', float('nan')):.3f}"
-            )
-    return callback
-
-
-def _run_single(label: str, overrides: dict) -> pd.DataFrame:
-    """Run one experiment and return its generation_counts_df."""
-    print(f"\n{'='*60}")
-    print(f"Starting run: {label}")
-    print(f"{'='*60}")
-    result = run_experiment(
-        config_overrides=overrides,
-        progress_callback=_make_progress_callback(label, overrides.get("n_generations", N_GENERATIONS)),
-        run_analysis=False,
-    )
-    df = result["generation_counts_df"].reset_index(drop=True)
-    df["generation"] = df["generation"].astype(int)
-    return df
+def _run_parallel(run_args: list) -> list:
+    """Execute a list of (label, overrides) pairs in parallel."""
+    n_workers = min(len(run_args), os.cpu_count() or 1)
+    print(f"Launching {len(run_args)} runs across {n_workers} worker(s)…")
+    with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
+        results = list(executor.map(_run_single_worker, run_args))
+    return results
 
 
 def _smooth(series: pd.Series) -> pd.Series:
     return series.rolling(window=SMOOTH_WINDOW, min_periods=1, center=True).mean()
 
 
-def _plot_series(axes, runs, series_list, ylabel):
-    """Shared plotting logic for both params and wealth figures."""
-    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-    for ax_idx, (col, series_label) in enumerate(series_list):
-        ax = axes[ax_idx]
-        for run_idx, (run_label, df) in enumerate(runs):
-            color = colors[run_idx % len(colors)]
-            if col not in df.columns:
-                continue
-            raw    = df[col].astype(float)
-            smooth = _smooth(raw)
-            gens   = df["generation"].values
-            ax.plot(gens, raw,    color=color, alpha=0.15, linewidth=0.8)
-            ax.plot(gens, smooth, color=color, linewidth=2.0, label=run_label)
-
-        ax.set_title(series_label, fontsize=10)
-        ax.set_xlabel("Generation")
-        ax.set_xlim(left=0)
-        ax.grid(True, alpha=0.3)
-        if ax_idx == 0:
-            ax.set_ylabel(ylabel)
-        if ax_idx == len(series_list) - 1:
-            ax.legend(fontsize=8, loc="best")
+def _sweep_colors(n: int) -> list:
+    """Return n evenly-spaced colours from SWEEP_COLORMAP."""
+    cmap = plt.get_cmap(SWEEP_COLORMAP)
+    return [cmap(i / max(n - 1, 1)) for i in range(n)]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FIGURE BUILDERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _build_params_figure(title: str, runs: list[tuple[str, pd.DataFrame]]) -> plt.Figure:
-    fig, axes = plt.subplots(1, len(PARAMS), figsize=(4 * len(PARAMS), 5), sharey=False)
+def _build_subplot_figure(
+    title: str,
+    runs: list,
+    subplot_specs: list,
+    ylabel: str,
+) -> plt.Figure:
+    """Generic figure builder used by both the params and diversity figures."""
+    n_subplots = len(subplot_specs)
+    fig, axes = plt.subplots(1, n_subplots, figsize=(4 * n_subplots, 5), sharey=False)
     fig.suptitle(title, fontsize=13, fontweight="bold", y=1.01)
-    _plot_series(axes, runs, PARAMS, "Mean parameter value")
+
+    colors    = _sweep_colors(len(runs))
+    linestyle = ["-", "--", ":", "-."]
+
+    for ax_idx, (subplot_title, series_specs) in enumerate(subplot_specs):
+        ax    = axes[ax_idx]
+        multi = len(series_specs) > 1
+
+        for run_idx, (run_label, df) in enumerate(runs):
+            color = colors[run_idx]
+            for spec_idx, (col, suffix) in enumerate(series_specs):
+                if col not in df.columns:
+                    continue
+                ls           = linestyle[spec_idx % len(linestyle)]
+                legend_label = f"{run_label} – {suffix}" if multi else run_label
+                raw          = df[col].astype(float)
+                smooth       = _smooth(raw)
+                gens         = df["generation"].values
+                ax.plot(gens, raw,    color=color, alpha=0.15, linewidth=0.8, linestyle=ls)
+                ax.plot(gens, smooth, color=color, linewidth=2.0, linestyle=ls, label=legend_label)
+
+        ax.set_title(subplot_title, fontsize=10)
+        ax.set_xlabel("Generation")
+        ax.set_xlim(left=0)
+        ax.grid(True, alpha=0.3)
+        if ax_idx == 0:
+            ax.set_ylabel(ylabel)
+        if ax_idx == n_subplots - 1:
+            ax.legend(fontsize=8, loc="best")
+
     fig.tight_layout()
     return fig
 
 
-def _build_wealth_figure(title: str, runs: list[tuple[str, pd.DataFrame]]) -> plt.Figure:
+def _build_params_figure(title: str, runs: list) -> plt.Figure:
+    return _build_subplot_figure(title, runs, PARAM_SUBPLOTS, "Mean parameter value")
+
+
+def _build_diversity_figure(title: str, runs: list) -> plt.Figure:
+    return _build_subplot_figure(title, runs, STD_SUBPLOTS, "Parameter std dev")
+
+
+def _build_wealth_figure(title: str, runs: list) -> plt.Figure:
     fig, ax = plt.subplots(1, 1, figsize=(6, 5))
     fig.suptitle(title, fontsize=13, fontweight="bold", y=1.01)
-    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+
+    colors = _sweep_colors(len(runs))
 
     for run_idx, (run_label, df) in enumerate(runs):
-        color = colors[run_idx % len(colors)]
+        color = colors[run_idx]
         if WEALTH_INFORMED_COL not in df.columns or WEALTH_ZI_COL not in df.columns:
             continue
         diff   = df[WEALTH_INFORMED_COL].astype(float) - df[WEALTH_ZI_COL].astype(float)
         smooth = _smooth(diff)
         gens   = df["generation"].values
-        ax.plot(gens, diff,   color=color, alpha=0.15, linewidth=0.8)
+        # Raw background intentionally omitted – per-round noise obscures trends.
         ax.plot(gens, smooth, color=color, linewidth=2.0, label=run_label)
 
     ax.axhline(0, color="white", linewidth=0.8, linestyle="--", alpha=0.4)
@@ -183,9 +241,12 @@ def _save_figure(fig: plt.Figure, filename: str) -> None:
     print(f"Saved: {path}")
 
 
-def _run_and_plot_sweep(sweep_name: str, sweep_title: str, runs: list[tuple[str, pd.DataFrame]]):
+def _run_and_plot_sweep(sweep_name: str, sweep_title: str, runs: list):
     params_fig = _build_params_figure(f"{sweep_title} — parameters", runs)
     _save_figure(params_fig, f"{sweep_name}_params.png")
+
+    diversity_fig = _build_diversity_figure(f"{sweep_title} — diversity", runs)
+    _save_figure(diversity_fig, f"{sweep_name}_diversity.png")
 
     wealth_fig = _build_wealth_figure(f"{sweep_title} — wealth", runs)
     _save_figure(wealth_fig, f"{sweep_name}_wealth.png")
@@ -195,10 +256,10 @@ def _run_and_plot_sweep(sweep_name: str, sweep_title: str, runs: list[tuple[str,
 # SWEEPS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def run_population_sweep() -> list[tuple[str, pd.DataFrame]]:
-    runs = []
+def run_population_sweep() -> list:
+    run_args = []
     for n_informed, n_zi in POPULATION_SWEEP:
-        label = f"informed={n_informed} zi={n_zi}"
+        label = f"{n_informed} parametrised, {n_zi} ZI"
         overrides = {
             "n_parameterised_agents": n_informed,
             "n_zi_agents":            n_zi,
@@ -207,14 +268,14 @@ def run_population_sweep() -> list[tuple[str, pd.DataFrame]]:
             "GBM_drift":              FIXED_DRIFT,
             "GBM_volatility":         FIXED_VOLATILITY,
         }
-        runs.append((label, _run_single(label, overrides)))
-    return runs
+        run_args.append((label, overrides))
+    return _run_parallel(run_args)
 
 
-def run_drift_sweep() -> list[tuple[str, pd.DataFrame]]:
-    runs = []
+def run_drift_sweep() -> list:
+    run_args = []
     for drift in DRIFT_SWEEP:
-        label = f"drift={drift:.2f}"
+        label = f"Drift {drift:.2f}"
         overrides = {
             "n_parameterised_agents": DEFAULT_N_INFORMED,
             "n_zi_agents":            DEFAULT_N_ZI,
@@ -223,14 +284,14 @@ def run_drift_sweep() -> list[tuple[str, pd.DataFrame]]:
             "GBM_drift":              drift,
             "GBM_volatility":         FIXED_VOLATILITY,
         }
-        runs.append((label, _run_single(label, overrides)))
-    return runs
+        run_args.append((label, overrides))
+    return _run_parallel(run_args)
 
 
-def run_volatility_sweep() -> list[tuple[str, pd.DataFrame]]:
-    runs = []
+def run_volatility_sweep() -> list:
+    run_args = []
     for vol in VOLATILITY_SWEEP:
-        label = f"vol={vol:.2f}"
+        label = f"Vol {vol:.2f}"
         overrides = {
             "n_parameterised_agents": DEFAULT_N_INFORMED,
             "n_zi_agents":            DEFAULT_N_ZI,
@@ -239,31 +300,37 @@ def run_volatility_sweep() -> list[tuple[str, pd.DataFrame]]:
             "GBM_drift":              FIXED_DRIFT,
             "GBM_volatility":         vol,
         }
-        runs.append((label, _run_single(label, overrides)))
-    return runs
+        run_args.append((label, overrides))
+    return _run_parallel(run_args)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Defined here (not at module level) so that worker sub-processes which
+# re-import this module don't attempt a display-backend switch.
 _SWEEP_REGISTRY = {
     "population": (
         run_population_sweep,
-        f"Population sweep  (drift={FIXED_DRIFT}, vol={FIXED_VOLATILITY}, total={TOTAL_AGENTS})",
+        f"Population Sweep  (drift={FIXED_DRIFT}, vol={FIXED_VOLATILITY}, total={TOTAL_AGENTS})",
     ),
     "drift": (
         run_drift_sweep,
-        f"GBM drift sweep  (vol={FIXED_VOLATILITY}, informed={DEFAULT_N_INFORMED}, zi={DEFAULT_N_ZI})",
+        f"GBM Drift Sweep  (vol={FIXED_VOLATILITY}, {DEFAULT_N_INFORMED} parametrised, {DEFAULT_N_ZI} ZI)",
     ),
     "volatility": (
         run_volatility_sweep,
-        f"GBM volatility sweep  (drift={FIXED_DRIFT}, informed={DEFAULT_N_INFORMED}, zi={DEFAULT_N_ZI})",
+        f"GBM Volatility Sweep  (drift={FIXED_DRIFT}, {DEFAULT_N_INFORMED} parametrised, {DEFAULT_N_ZI} ZI)",
     ),
 }
 
 
 def main():
+    # Switch backend here, not at module level, so spawned worker processes
+    # that re-import this module don't try to open a display.
+    plt.switch_backend("TkAgg")   # change to "MacOSX" or "Qt5Agg" if TkAgg unavailable
+
     unknown = set(ACTIVE_SWEEPS) - set(_SWEEP_REGISTRY)
     if unknown:
         raise ValueError(f"Unknown sweep(s) in ACTIVE_SWEEPS: {unknown}. "

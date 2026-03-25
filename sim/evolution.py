@@ -104,21 +104,30 @@ def _make_child(
     param_bounds: dict,
     default_strategy_params: dict,
     frozen_params: set = frozenset(),
+    second_parent: dict | None = None,
 ) -> dict:
     """
-    Create a child from a parent agent dict.
+    Create a child from one or two parent agent dicts.
 
-    - info_param is perturbed by Gaussian noise, clipped to info_param_bounds
-    - each strategy_param is perturbed by Gaussian noise with its own std
-    - with probability mutation_rate a param instead jumps to a random value
-      within its bounds (exploration)
-    - any param named in frozen_params is inherited unchanged from the parent
+    - If second_parent is provided, uniform crossover is applied: each
+      parameter is independently inherited from parent or second_parent with
+      equal probability before mutation is applied.
+    - info_param is perturbed by Gaussian noise, clipped to info_param_bounds.
+    - Each strategy_param is perturbed by Gaussian noise with its own std.
+    - With probability mutation_rate a param instead jumps to a random value
+      within its bounds (exploration).
+    - Any param named in frozen_params is inherited unchanged from the parent.
     """
     if "info_param" in frozen_params:
         info_param = parent["info_param"]
     else:
         lo, hi = info_param_bounds
-        info_param = parent["info_param"] + rng.gauss(0.0, info_param_mutation_std)
+        base_ip = (
+            second_parent["info_param"]
+            if second_parent is not None and rng.random() < 0.5
+            else parent["info_param"]
+        )
+        info_param = base_ip + rng.gauss(0.0, info_param_mutation_std)
         info_param = max(lo, min(hi, info_param))
 
     child: dict = {
@@ -128,13 +137,21 @@ def _make_child(
 
     if parent["trader_type"] == "parameterised_informed":
         parent_params = parent.get("strategy_params", default_strategy_params)
+        second_params = (
+            second_parent.get("strategy_params", default_strategy_params)
+            if second_parent is not None else None
+        )
         mutated_params = {}
         for param, (p_lo, p_hi, p_std) in param_bounds.items():
-            val = parent_params.get(param, default_strategy_params[param])
+            base = (
+                second_params.get(param, default_strategy_params[param])
+                if second_params is not None and rng.random() < 0.5
+                else parent_params.get(param, default_strategy_params[param])
+            )
             if rng.random() < mutation_rate:
                 val = rng.uniform(p_lo, p_hi)
             else:
-                val = max(p_lo, min(p_hi, val + rng.gauss(0.0, p_std)))
+                val = max(p_lo, min(p_hi, base + rng.gauss(0.0, p_std)))
             mutated_params[param] = val
 
         child["strategy_params"] = mutated_params
@@ -154,6 +171,7 @@ def evolve_truncation(
     info_param_mutation_std: float = 0.01,
     info_param_bounds: tuple[float, float] = (0.0, 1.0),
     frozen_params: set = frozenset(),
+    crossover_rate: float = 0.0,
 ) -> list[dict]:
     """
     Truncation selection:
@@ -161,6 +179,8 @@ def evolve_truncation(
     - remove the bottom_k agents
     - keep the remaining survivors
     - generate bottom_k children by sampling parents uniformly from the top_n agents
+    - if crossover_rate > 0, each child is produced via uniform crossover between
+      two independently sampled parents before mutation
     """
     if rng is None:
         rng = random.Random()
@@ -185,7 +205,14 @@ def evolve_truncation(
                   default_strategy_params=default_strategy_params,
                   frozen_params=frozen_params)
 
-    children = [_make_child(rng.choice(parent_pool), **kwargs) for _ in range(bottom_k)]
+    children = []
+    for _ in range(bottom_k):
+        primary = rng.choice(parent_pool)
+        second  = None
+        if crossover_rate > 0 and rng.random() < crossover_rate and len(parent_pool) > 1:
+            others = [p for p in parent_pool if p is not primary]
+            second = rng.choice(others) if others else None
+        children.append(_make_child(primary, second_parent=second, **kwargs))
     return list(survivors) + children
 
 
@@ -201,12 +228,14 @@ def evolve_tournament(
     info_param_mutation_std: float = 0.01,
     info_param_bounds: tuple[float, float] = (0.0, 1.0),
     frozen_params: set = frozenset(),
+    crossover_rate: float = 0.0,
 ) -> list[dict]:
     """
     Tournament selection:
     - remove the bottom_k agents by fitness
     - keep the remaining survivors
     - for each child, sample tournament_size candidates and select the best as parent
+    - if crossover_rate > 0, a second tournament winner is drawn as the second parent
     """
     if rng is None:
         rng = random.Random()
@@ -232,8 +261,11 @@ def evolve_tournament(
 
     children = []
     for _ in range(bottom_k):
-        winner = max(rng.sample(ranked, k=tournament_size), key=lambda x: x["wealth"])
-        children.append(_make_child(winner, **kwargs))
+        primary = max(rng.sample(ranked, k=tournament_size), key=lambda x: x["wealth"])
+        second  = None
+        if crossover_rate > 0 and rng.random() < crossover_rate and population_size > 1:
+            second = max(rng.sample(ranked, k=tournament_size), key=lambda x: x["wealth"])
+        children.append(_make_child(primary, second_parent=second, **kwargs))
 
     return list(survivors) + children
 
@@ -250,12 +282,15 @@ def evolve_fitness_proportionate(
     info_param_mutation_std: float = 0.01,
     info_param_bounds: tuple[float, float] = (0.0, 1.0),
     frozen_params: set = frozenset(),
+    crossover_rate: float = 0.0,
 ) -> list[dict]:
     """
     Fitness-proportionate (roulette wheel) selection:
     - remove the bottom_k agents by fitness
     - keep the remaining survivors
     - create bottom_k children by sampling parents weighted by adjusted wealth
+    - if crossover_rate > 0, a second parent is drawn from the same weighted
+      distribution for crossover
     """
     if rng is None:
         rng = random.Random()
@@ -282,8 +317,13 @@ def evolve_fitness_proportionate(
                   default_strategy_params=default_strategy_params,
                   frozen_params=frozen_params)
 
-    children = [_make_child(rng.choices(ranked, weights=weights, k=1)[0], **kwargs)
-                for _ in range(bottom_k)]
+    children = []
+    for _ in range(bottom_k):
+        primary = rng.choices(ranked, weights=weights, k=1)[0]
+        second  = None
+        if crossover_rate > 0 and rng.random() < crossover_rate and population_size > 1:
+            second = rng.choices(ranked, weights=weights, k=1)[0]
+        children.append(_make_child(primary, second_parent=second, **kwargs))
     return list(survivors) + children
 
 
@@ -330,6 +370,7 @@ def evolve_population(
         "param_bounds":            param_bounds,
         "default_strategy_params": default_strategy_params,
         "frozen_params":           algorithm_params.get("frozen_params", frozenset()),
+        "crossover_rate":          algorithm_params.get("crossover_rate", 0.0),
     }
 
     if algorithm_name == "truncation":

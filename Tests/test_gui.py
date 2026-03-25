@@ -151,8 +151,6 @@ def _build_sample_db(db_path: Path):
                     {
                         "qty_aggression": qty_mean,
                         "signal_aggression": 0.45 + 0.05 * generation_id,
-                        "threshold": 0.10 + 0.02 * generation_id,
-                        "signal_clip": 0.80 + 0.03 * generation_id,
                     },
                 ),
                 2: _StubAgent("zi", 0.0, 500.0, 5.0),
@@ -317,8 +315,6 @@ def test_command_center_populates_widgets_from_payload(monkeypatch):
             assert len(window.agent_info_param_plot.listDataItems()) == 1
             assert len(window.agent_qty_aggression_plot.listDataItems()) == 1
             assert len(window.agent_signal_aggression_plot.listDataItems()) == 1
-            assert len(window.agent_threshold_plot.listDataItems()) == 1
-            assert len(window.agent_signal_clip_plot.listDataItems()) == 1
         finally:
             window.close()
             app.processEvents()

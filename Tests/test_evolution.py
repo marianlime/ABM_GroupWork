@@ -19,9 +19,8 @@ from sim.evolution import (
 PARAM_BOUNDS = {
     "qty_aggression":    (0.1,  5.0, 0.20),
     "signal_aggression": (0.0,  1.0, 0.05),
-    "threshold":         (0.0,  0.50, 0.03),
 }
-DEFAULTS = {"qty_aggression": 1.0, "signal_aggression": 1.0, "threshold": 0.0}
+DEFAULTS = {"qty_aggression": 1.0, "signal_aggression": 1.0}
 
 
 class FakeAgent:

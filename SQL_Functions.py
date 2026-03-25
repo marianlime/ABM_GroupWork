@@ -152,22 +152,16 @@ def update_generation_param_means(con,
                                   experiment_id,
                                   generation_id,
                                   mean_qty_aggression,
-                                  mean_signal_aggression,
-                                  mean_threshold,
-                                  mean_signal_clip):
+                                  mean_signal_aggression):
     """Update the mean strategy-parameter columns on an existing generations row."""
     con.execute("""
         UPDATE generations
         SET mean_qty_aggression = ?,
-            mean_signal_aggression = ?,
-            mean_threshold = ?,
-            mean_signal_clip = ?
+            mean_signal_aggression = ?
         WHERE experiment_id = ? AND generation_id = ?
     """, [
         float(mean_qty_aggression) if mean_qty_aggression is not None else None,
         float(mean_signal_aggression) if mean_signal_aggression is not None else None,
-        float(mean_threshold) if mean_threshold is not None else None,
-        float(mean_signal_clip) if mean_signal_clip is not None else None,
         experiment_id,
         int(generation_id),
     ])
@@ -207,8 +201,6 @@ def insert_agent_population(con, experiment_id, generation_id, agents):
 
         qty_aggression = params.get("qty_aggression", None)
         signal_aggression = params.get("signal_aggression", None)
-        threshold = params.get("threshold", None)
-        signal_clip = params.get("signal_clip", None)
 
         data.append((
             experiment_id,
@@ -218,8 +210,6 @@ def insert_agent_population(con, experiment_id, generation_id, agents):
             float(agent.info_param),
             float(qty_aggression) if qty_aggression is not None else None,
             float(signal_aggression) if signal_aggression is not None else None,
-            float(threshold) if threshold is not None else None,
-            float(signal_clip) if signal_clip is not None else None,
             group_label,
             float(agent.cash),
             float(agent.shares),
@@ -234,13 +224,11 @@ def insert_agent_population(con, experiment_id, generation_id, agents):
             info_param,
             qty_aggression,
             signal_aggression,
-            threshold,
-            signal_clip,
             group_label,
             initial_cash,
             initial_shares
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, data)
 
 
@@ -386,9 +374,7 @@ def persist_generation_bundle(con,
                               agent_round_records,
                               completion_time,
                               mean_qty_aggression,
-                              mean_signal_aggression,
-                              mean_threshold,
-                              mean_signal_clip):
+                              mean_signal_aggression):
     """Atomically write all generation data (GBM config, fundamental path, agents, market and agent rounds) in a single transaction."""
     con.execute("BEGIN TRANSACTION")
     try:
@@ -411,8 +397,6 @@ def persist_generation_bundle(con,
             generation_id,
             mean_qty_aggression,
             mean_signal_aggression,
-            mean_threshold,
-            mean_signal_clip,
         )
         con.execute("COMMIT")
     except Exception:

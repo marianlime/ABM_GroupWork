@@ -16,7 +16,7 @@ import ulid
 
 from analysis import (
     analyse_game_results,
-    compute_strategy_mean_info_param,
+    compute_strategy_info_param_stats,
     compute_strategy_mean_wealth,
     compute_strategy_param_stats,
 )
@@ -33,8 +33,6 @@ DB_PATH = "experiment_results.duckdb"
 DEFAULT_STRATEGY_PARAMS = {
     "qty_aggression": 0.5,
     "signal_aggression": 0.5,
-    "threshold": 0.0,
-    "signal_clip": 0.5,
 }
 
 DEFAULT_EXPERIMENT_CONFIG = {
@@ -53,7 +51,7 @@ DEFAULT_EXPERIMENT_CONFIG = {
     "GBM_volatility": 0.20,
     "GBM_drift": 0.05,
     "info_param_distribution_type": "evenly_spaced",
-    "distribution_data": {"low": 0.0, "high": 1.0},
+    "distribution_data": {"low": 0.0, "high": 2.0},
     "signal_generator_noise_distribution": "lognormal",
     "algorithm_name": "truncation",
     "algorithm_params": {
@@ -61,10 +59,11 @@ DEFAULT_EXPERIMENT_CONFIG = {
         "bottom_k_fraction": 0.3,
         "mutation_rate": 0.05,
         "info_param_mutation_std": 0.01,
-        "info_param_bounds": (0.0, 1.0),
+        "info_param_bounds": (0.0, 2.0),
         "param_bounds": PARAM_BOUNDS,
         "default_strategy_params": DEFAULT_STRATEGY_PARAMS,
         "frozen_params": set(),
+        "crossover_rate": 0.0,
     },
     "rolling_n": 10,
 }
@@ -408,13 +407,11 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
             if informed_specs:
                 param_means = {
                     param: sum(agent["strategy_params"][param] for agent in informed_specs) / len(informed_specs)
-                    for param in ["qty_aggression", "signal_aggression", "threshold", "signal_clip"]
+                    for param in ["qty_aggression", "signal_aggression"]
                 }
                 param_summary = (
                     f"qty_agg={param_means['qty_aggression']:.2f} "
-                    f"sig_agg={param_means['signal_aggression']:.2f} "
-                    f"thr={param_means['threshold']:.2f} "
-                    f"clip={param_means['signal_clip']:.2f}"
+                    f"sig_agg={param_means['signal_aggression']:.2f}"
                 )
             else:
                 param_summary = "no informed agents"
@@ -500,8 +497,9 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
             gen_entry = generation_counts[-1]
             for strategy, wealth in compute_strategy_mean_wealth(final_score, game.agents).items():
                 gen_entry[f"mean_wealth_{strategy}"] = wealth
-            for strategy, info_param in compute_strategy_mean_info_param(game.agents).items():
-                gen_entry[f"mean_info_param_{strategy}"] = info_param
+            for strategy, stats in compute_strategy_info_param_stats(game.agents).items():
+                gen_entry[f"mean_info_param_{strategy}"] = stats["mean"]
+                gen_entry[f"std_info_param_{strategy}"]  = stats["std"]
             for param, stats in compute_strategy_param_stats(game.agents).items():
                 gen_entry[f"mean_{param}"] = stats["mean"]
                 gen_entry[f"std_{param}"] = stats["std"]
@@ -531,8 +529,6 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
                 _utc_now(),
                 gen_entry.get("mean_qty_aggression"),
                 gen_entry.get("mean_signal_aggression"),
-                gen_entry.get("mean_threshold"),
-                gen_entry.get("mean_signal_clip"),
             )
 
             strategy_performance_round = _build_strategy_performance_round_records(game)
@@ -553,8 +549,6 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
                             "generation_id": generation_id,
                             "mean_qty_aggression": gen_entry.get("mean_qty_aggression"),
                             "mean_signal_aggression": gen_entry.get("mean_signal_aggression"),
-                            "mean_threshold": gen_entry.get("mean_threshold"),
-                            "mean_signal_clip": gen_entry.get("mean_signal_clip"),
                             "mean_info_param_parameterised_informed": gen_entry.get(
                                 "mean_info_param_parameterised_informed"
                             ),

@@ -64,6 +64,25 @@ def compute_strategy_mean_info_param(agents) -> dict:
     }
 
 
+def compute_strategy_info_param_stats(agents) -> dict:
+    """
+    Mean and std of info_param keyed by strategy type.
+
+    Returns {trader_type: {"mean": float, "std": float}}.
+    """
+    grouped: dict[str, list[float]] = {}
+    for agent in agents.values():
+        grouped.setdefault(agent.trader_type, []).append(float(agent.info_param))
+
+    return {
+        trader_type: {
+            "mean": float(np.mean(values)),
+            "std":  float(np.std(values)),
+        } if values else {"mean": np.nan, "std": np.nan}
+        for trader_type, values in grouped.items()
+    }
+
+
 
 def compute_strategy_param_stats(agents) -> dict:
     """
@@ -130,7 +149,7 @@ def _format_display_df(df: pd.DataFrame, display_cols: list[str]) -> pd.DataFram
     display_df = df.loc[:, display_cols].copy()
     if "type" in display_df.columns:
         zi_mask = display_df["type"] == "zi"
-        for col in ["qty_aggression", "signal_aggression", "threshold", "signal_clip"]:
+        for col in ["qty_aggression", "signal_aggression"]:
             if col in display_df.columns:
                 display_df[col] = display_df[col].astype(object)
                 display_df.loc[zi_mask, col] = ""
@@ -181,8 +200,6 @@ def analyse_game_results(
                     "info_param":        float(getattr(agent, "info_param", np.nan)),
                     "qty_aggression":    params.get("qty_aggression",    np.nan),
                     "signal_aggression": params.get("signal_aggression", np.nan),
-                    "threshold":         params.get("threshold",         np.nan),
-                    "signal_clip":       params.get("signal_clip",       np.nan),
                     "wealth_final":      float(wealth_map.get(aid, np.nan)),
                 })
     else:
@@ -197,8 +214,6 @@ def analyse_game_results(
                 "info_param":        float(getattr(agent, "info_param", np.nan)),
                 "qty_aggression":    params.get("qty_aggression",    np.nan),
                 "signal_aggression": params.get("signal_aggression", np.nan),
-                "threshold":         params.get("threshold",         np.nan),
-                "signal_clip":       params.get("signal_clip",       np.nan),
                 "cash_final":        float(getattr(agent, "cash",   np.nan)),
                 "shares_final":      float(getattr(agent, "shares", np.nan)),
                 "wealth_final":      float(wealth_map.get(aid, np.nan)),
@@ -209,7 +224,7 @@ def analyse_game_results(
 
     # ── Print summaries ───────────────────────────────────────────────────────
     display_cols = ["rank", "agent_id", "type", "info_param",
-                    "qty_aggression", "signal_aggression", "threshold", "signal_clip",
+                    "qty_aggression", "signal_aggression",
                     "wealth_final"]
     display_cols = [c for c in display_cols if c in df.columns]
 
@@ -487,26 +502,7 @@ def analyse_game_results(
         plt.tight_layout()
         _save_and_close_plot(f"{title_prefix}wealth_trajectories_{_data_label}")
 
-    # ----- 9. Clip−threshold gap over generations -----
-    if (generation_counts_df is not None and not generation_counts_df.empty
-            and "mean_threshold" in generation_counts_df.columns
-            and "mean_signal_clip" in generation_counts_df.columns):
-        gens = generation_counts_df["generation"]
-        gap  = generation_counts_df["mean_signal_clip"] - generation_counts_df["mean_threshold"]
-        smooth_gap = gap.rolling(window=_ROLL, min_periods=1, center=True).mean()
-        fig, ax = plt.subplots(figsize=(10, 4))
-        ax.plot(gens, gap,        color="purple", alpha=0.2, linewidth=0.8)
-        ax.plot(gens, smooth_gap, color="purple", linewidth=2.0,
-                label=f"{_ROLL}-gen rolling mean")
-        ax.axhline(0, color="black", linewidth=0.8, linestyle="--", label="threshold = clip boundary")
-        ax.set_xlabel("Generation")
-        ax.set_ylabel("mean(signal_clip − threshold)")
-        ax.set_title(f"{title_prefix}Clip−Threshold Gap Over Generations (positive = agents can trade)")
-        ax.legend()
-        plt.tight_layout()
-        _save_and_close_plot(f"{title_prefix}clip_threshold_gap_over_generations")
-
-    # ----- 10. Mean volume over generations -----
+    # ----- 9. Mean volume over generations -----
     if (generation_counts_df is not None and not generation_counts_df.empty
             and "mean_volume" in generation_counts_df.columns
             and "generation" in generation_counts_df.columns):
