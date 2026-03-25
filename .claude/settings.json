@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(ls /Users/noah.miles/Documents/crutchachos/*.duckdb)",
-      "Bash(python3 -c \":*)"
-    ]
-  }
-}
