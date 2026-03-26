@@ -17,8 +17,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFormLayout, 
 from Misc.defaults import COMPARISON_PARAM_SPECS, WEALTH_INFORMED_COLUMN, WEALTH_ZI_COLUMN
 from Database.SQL_Functions import humanise_sql_object_name, load_comparison_payload, load_database_payload
 from Misc.defaults import DB_PATH, DEFAULT_EXPERIMENT_CONFIG
-from Misc.sweep_runtime import (load_partial_sweep_run, make_temp_duckdb_path, merge_experiments_from_temp_dbs, peek_partial_sweep_progress, run_single_sweep_process)
-from main import run_experiment
+from Misc.sweep_runtime import (load_partial_sweep_run, make_temp_duckdb_path, merge_experiments_from_temp_dbs, peek_partial_sweep_progress, prepare_sweep_plot_dataframe, run_single_sweep_process)
 
 
 DEFAULT_DB_PATH = DB_PATH
@@ -123,9 +122,10 @@ SWEEP_COMPARISON_OUTPUT_DIR = Path("comparison_outputs")
 SWEEP_PARAM_SUBPLOTS = [("mean_qty_aggression", "Qty Aggression"), ("mean_signal_aggression", "Signal Aggression"), ("mean_info_param_parameterised_informed", "Info Param (informed)")]
 SWEEP_STD_SUBPLOTS = [("std_qty_aggression", "Qty Aggression Std Dev"), ("std_signal_aggression", "Signal Aggression Std Dev"), ("std_info_param_parameterised_informed", "Info Param Std Dev")]
 SWEEP_COLOR_STOPS = [(68, 1, 84),(71, 44, 122), (59, 81, 139), (44, 113, 142), (33, 144, 141), (39, 173, 129), (92, 200, 99), (170, 220, 50), (253, 231, 37)]
-SWEEP_DEFAULTS = {"population": {"total_agents": 100, "n_generations": 100, "n_rounds": 50, "max_parallel_workers": 4, "fixed_drift": 0.02, "fixed_volatility": 0.10, "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20", "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20", "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50"},
-                  "drift": {"total_agents": 100, "n_generations": 100, "n_rounds": 50, "max_parallel_workers": 4, "fixed_drift": 0.02, "fixed_volatility": 0.10, "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20", "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20", "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50"},
-                  "volatility": {"total_agents": 100, "n_generations": 100, "n_rounds": 50, "max_parallel_workers": 4, "fixed_drift": 0.02, "fixed_volatility": 0.10, "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20", "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20", "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50"}}
+DEFAULT_SWEEP_WORKERS = max(1, os.cpu_count() or 1)
+SWEEP_DEFAULTS = {"population": {"total_agents": 100, "n_generations": 100, "n_rounds": 50, "max_parallel_workers": DEFAULT_SWEEP_WORKERS, "fixed_drift": 0.02, "fixed_volatility": 0.10, "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20", "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20", "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50"},
+                  "drift": {"total_agents": 100, "n_generations": 100, "n_rounds": 50, "max_parallel_workers": DEFAULT_SWEEP_WORKERS, "fixed_drift": 0.02, "fixed_volatility": 0.10, "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20", "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20", "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50"},
+                  "volatility": {"total_agents": 100, "n_generations": 100, "n_rounds": 50, "max_parallel_workers": DEFAULT_SWEEP_WORKERS, "fixed_drift": 0.02, "fixed_volatility": 0.10, "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20", "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20", "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50"}}
 
 def _generate_comparison_line_colors(n: int = 8, min_dist: float = 80.0) -> list[tuple[int, int, int]]:
 
@@ -310,6 +310,7 @@ def _pair_trade_links_from_agent_round(agent_round_df: pd.DataFrame) -> pd.DataF
 
 
 def _run_experiment(*args, **kwargs):
+    from main import run_experiment
     return run_experiment(*args, **kwargs)
 
 
@@ -604,9 +605,10 @@ class ExperimentRunnerWorker(QThread):
     completed = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, config_overrides):
+    def __init__(self, config_overrides, *, graphs_only=False):
         super().__init__()
         self.config_overrides = config_overrides
+        self.graphs_only = bool(graphs_only)
 
     def run(self):
         try:
@@ -614,7 +616,9 @@ class ExperimentRunnerWorker(QThread):
                 config_overrides=self.config_overrides,
                 progress_callback=self.progress.emit,
                 run_analysis=True,
+                disable_db_writes=self.graphs_only,
             )
+            result["graphs_only"] = self.graphs_only
             self.completed.emit(result)
         except Exception as exc:
             self.error.emit(str(exc))
@@ -671,14 +675,17 @@ class SweepComparisonWorker(QThread):
             )
             indexed_results = [None] * total_runs
             completed_runs = 0
-            target_db_path = str(self.settings["db_path"])
+            target_db_path = str(self.settings.get("db_path", ""))
+            graphs_only = bool(self.settings.get("graphs_only", False))
             process_args = []
             temp_db_by_run = {}
             experiment_id_by_run = {}
             last_live_generation_by_run = {}
             for run_index, (label, overrides) in enumerate(run_args, start=1):
-                tmp_db = make_temp_duckdb_path(f"abm_{self.sweep_name}")
-                temp_db_paths.append(tmp_db)
+                tmp_db = None
+                if not graphs_only:
+                    tmp_db = make_temp_duckdb_path(f"abm_{self.sweep_name}")
+                    temp_db_paths.append(tmp_db)
                 temp_db_by_run[run_index] = tmp_db
                 experiment_id_by_run[run_index] = None
                 last_live_generation_by_run[run_index] = 0
@@ -702,6 +709,8 @@ class SweepComparisonWorker(QThread):
                 while pending:
                     done, pending = wait(pending, timeout=0.75, return_when=FIRST_COMPLETED)
                     for run_index, temp_db_path in temp_db_by_run.items():
+                        if graphs_only or not temp_db_path:
+                            continue
                         if indexed_results[run_index - 1] is not None:
                             continue
                         experiment_id, live_generation = peek_partial_sweep_progress(
@@ -751,14 +760,15 @@ class SweepComparisonWorker(QThread):
                                 "data": result_payload["data"],
                             }
                         )
-            merge_experiments_from_temp_dbs(
-                [
-                    (result["temp_db_path"], result["experiment_id"])
-                    for result in indexed_results
-                    if result is not None
-                ],
-                target_db_path,
-            )
+            if not graphs_only:
+                merge_experiments_from_temp_dbs(
+                    [
+                        (result["temp_db_path"], result["experiment_id"])
+                        for result in indexed_results
+                        if result is not None
+                    ],
+                    target_db_path,
+                )
             for result in indexed_results:
                 if result is None:
                     continue
@@ -831,6 +841,7 @@ class CommandCenter(QMainWindow):
         self._last_payload = None
         self._comparison_payload = None
         self._comparison_sweep_payload = None
+        self._session_run_comparison_runs = []
         self._comparison_selected_ids = []
         self._comparison_legend_items = []
         self._comparison_sweep_legend_items = []
@@ -905,7 +916,7 @@ class CommandCenter(QMainWindow):
         self.tabs.currentChanged.connect(self._on_main_tab_changed)
 
         self._apply_theme()
-        self.refresh_data()
+        QTimer.singleShot(0, self.refresh_data)
 
     def _register_plot_canvas(self, canvas):
         self._plot_canvases.append(canvas)
@@ -1244,6 +1255,11 @@ class CommandCenter(QMainWindow):
         self.checkbox_show_zi.setChecked(True)
         self.checkbox_dark_mode = QCheckBox("Dark mode")
         self.checkbox_dark_mode.setChecked(False)
+        self.checkbox_graphs_only = QCheckBox("Graphs only (skip SQL/DuckDB)")
+        self.checkbox_graphs_only.setToolTip(
+            "Apply graphs-only mode to all new runs, including sweep runs. "
+            "This skips DuckDB persistence and uses graph outputs only."
+        )
         data_form.addRow("DuckDB File:", self.input_db_path)
         data_form.addRow("Experiment:", self.combo_experiment)
         data_form.addRow("Generation:", self.combo_generation)
@@ -1254,6 +1270,7 @@ class CommandCenter(QMainWindow):
         data_form.addRow("Series Visibility:", self.checkbox_show_parameterised)
         data_form.addRow("", self.checkbox_show_zi)
         data_form.addRow("Appearance:", self.checkbox_dark_mode)
+        data_form.addRow("Output Mode:", self.checkbox_graphs_only)
         data_group.setLayout(data_form)
         left_layout.addWidget(data_group)
 
@@ -2279,6 +2296,7 @@ class CommandCenter(QMainWindow):
             raise ValueError("Max parallel workers must be at least 1.")
         return {
             "db_path": self.input_db_path.text().strip(),
+            "graphs_only": self.checkbox_graphs_only.isChecked(),
             "total_agents": int(self.sweep_total_agents_input.text().strip()),
             "n_generations": int(self.sweep_generations_input.text().strip()),
             "n_rounds": int(self.sweep_rounds_input.text().strip()),
@@ -2305,7 +2323,7 @@ class CommandCenter(QMainWindow):
         try:
             sweep_name = self.combo_sweep_type.currentText().strip()
             sweep_settings = self._collect_sweep_settings()
-            if not sweep_settings["db_path"]:
+            if not sweep_settings["db_path"] and not sweep_settings["graphs_only"]:
                 raise ValueError("Please provide a DuckDB file path before running a sweep.")
             _build_sweep_run_args(sweep_name, sweep_settings)
         except Exception as exc:
@@ -2440,9 +2458,14 @@ class CommandCenter(QMainWindow):
         self._refresh_active_tab()
         self._save_sweep_comparison_exports(payload.get("sweep_name", "sweep"))
         self.tabs.setCurrentWidget(self.comparison_tab)
-        self.sweep_status_label.setText("Sweep comparison finished, saved to DuckDB, and exported to comparison_outputs.")
-        self._append_sweep_progress_line("Sweep comparison finished and saved to DuckDB.")
-        self.refresh_data()
+        graphs_only = bool(payload.get("settings", {}).get("graphs_only", False))
+        if graphs_only:
+            self.sweep_status_label.setText("Sweep comparison finished in graphs-only mode and exported to comparison_outputs.")
+            self._append_sweep_progress_line("Sweep comparison finished without merging runs into DuckDB.")
+        else:
+            self.sweep_status_label.setText("Sweep comparison finished, saved to DuckDB, and exported to comparison_outputs.")
+            self._append_sweep_progress_line("Sweep comparison finished and saved to DuckDB.")
+            self.refresh_data()
 
     def _show_sweep_error(self, message):
         self.sweep_status_label.setText("Sweep comparison failed.")
@@ -2488,10 +2511,11 @@ class CommandCenter(QMainWindow):
         self.comparison_status_label.setText("Comparison loaded.")
 
     def start_new_run(self):
+        graphs_only = self.checkbox_graphs_only.isChecked()
         if self.run_worker is not None:
             QMessageBox.information(self, "Run In Progress", "A run is already in progress.")
             return
-        if self.worker is not None:
+        if self.worker is not None and not graphs_only:
             QMessageBox.information(
                 self,
                 "Database Busy",
@@ -2502,7 +2526,7 @@ class CommandCenter(QMainWindow):
         try:
             mutation_rate = float(self.run_input_mutation.text().strip())
             db_path = self.input_db_path.text().strip()
-            if not db_path:
+            if not db_path and not graphs_only:
                 raise ValueError("Please provide a DuckDB file path before starting a run.")
             config_overrides = {
                 "db_path": db_path,
@@ -2531,9 +2555,15 @@ class CommandCenter(QMainWindow):
         self.tabs.setCurrentWidget(self.dashboard_tab)
 
         self.btn_start_run.setEnabled(False)
-        self.run_status_label.setText("Starting experiment...")
+        if graphs_only:
+            self.run_status_label.setText("Starting graphs-only experiment...")
+        else:
+            self.run_status_label.setText("Starting experiment...")
 
-        self.run_worker = ExperimentRunnerWorker(config_overrides)
+        self.run_worker = ExperimentRunnerWorker(
+            config_overrides,
+            graphs_only=graphs_only,
+        )
         self.run_worker.progress.connect(self._handle_run_progress)
         self.run_worker.completed.connect(self._handle_run_completed)
         self.run_worker.error.connect(self._handle_run_error)
@@ -2663,6 +2693,7 @@ class CommandCenter(QMainWindow):
                     .reset_index(drop=True)
                 )
             self._rebuild_live_payload()
+            self._refresh_live_dashboard()
             self._mark_tabs_dirty("dashboard", "strategy", "agent", "microstructure")
             if self._comparison_payload is not None and str(self._current_experiment_id) in set(self._comparison_selected_ids):
                 live_comparison_df = self._comparison_payload.get("comparison_metrics", pd.DataFrame()).copy()
@@ -2707,6 +2738,21 @@ class CommandCenter(QMainWindow):
         self._current_run_total_generations = None
         self._current_run_total_rounds = None
         self._update_live_progress_label()
+        self._record_completed_run_for_comparison(result)
+        if result.get("graphs_only"):
+            if self._live_payload is not None:
+                self._last_payload = self._live_payload
+            self._pending_sql_objects = {}
+            self._populate_sql_tab({})
+            self._mark_tabs_dirty("dashboard", "strategy", "agent", "microstructure", "comparison", "sql")
+            self._refresh_active_tab(force=True)
+            self.tabs.setCurrentWidget(self.dashboard_tab)
+            self.run_status_label.setText(
+                f"Finished experiment {result['experiment_id']} in graphs-only mode."
+            )
+            self.status_label.setText("Graphs-only run finished. No SQL/DuckDB data was written.")
+            return
+
         self.run_status_label.setText(
             f"Finished experiment {result['experiment_id']}."
         )
@@ -2731,6 +2777,49 @@ class CommandCenter(QMainWindow):
         self._update_live_progress_label()
         self.run_status_label.setText("Run failed.")
         QMessageBox.critical(self, "Run Error", message)
+
+    def _record_completed_run_for_comparison(self, result):
+        generation_counts_df = result.get("generation_counts_df", pd.DataFrame())
+        if generation_counts_df is None or generation_counts_df.empty:
+            return
+
+        run_df = prepare_sweep_plot_dataframe(generation_counts_df.reset_index(drop=True).copy())
+        if run_df.empty:
+            return
+
+        config = result.get("config", {}) or {}
+        experiment_id = str(result.get("experiment_id", "unknown"))
+        label = str(config.get("experiment_name") or f"Run {experiment_id[:8]}")
+        run_entry = {
+            "label": f"{label} | {experiment_id[:8]}",
+            "experiment_id": experiment_id,
+            "data": run_df,
+        }
+
+        self._session_run_comparison_runs = [
+            existing
+            for existing in self._session_run_comparison_runs
+            if str(existing.get("experiment_id")) != experiment_id
+        ]
+        self._session_run_comparison_runs.append(run_entry)
+
+        self._comparison_sweep_payload = {
+            "sweep_title": "Completed Runs This Session",
+            "runs": list(self._session_run_comparison_runs),
+            "settings": {"graphs_only": True},
+        }
+        self._update_sweep_summary(self._comparison_sweep_payload)
+        self._mark_tabs_dirty("comparison")
+
+    def _refresh_live_dashboard(self):
+        self._update_parameter_plot(self.live_generations_df.copy())
+        self._update_wealth_plot_from_generation_metrics(self.live_generations_df.copy())
+        self._update_mean_info_param_plot(
+            self._live_payload["mean_info_param"] if self._live_payload is not None else pd.DataFrame()
+        )
+        self._update_market_plot(self.live_market_summary_df.copy())
+        self._update_profit_plot(self.live_strategy_profit_round_df.copy())
+        self._update_volume_share_plot(self.live_volume_share_round_df.copy())
 
     def _rebuild_live_payload(self):
         wealth_history_df = pd.DataFrame([

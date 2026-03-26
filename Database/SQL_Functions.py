@@ -606,23 +606,44 @@ def load_database_payload(db_path: str, experiment_id=None, generation_id=None) 
                 [selected_experiment_id, selected_generation_id],
             ).fetchdf()
 
-            agent_aggressiveness_spread_df = con.execute(
-                """
-                SELECT
-                    v.round_number,
-                    v.agent_id,
-                    ap.strategy_type,
-                    v.aggressiveness_spread
-                FROM agent_aggressiveness_spread_per_round v
-                JOIN agent_population ap
-                  ON v.experiment_id = ap.experiment_id
-                 AND v.generation_id = ap.generation_id
-                 AND v.agent_id = ap.agent_id
-                WHERE v.experiment_id = ? AND v.generation_id = ?
-                ORDER BY v.agent_id, v.round_number
-                """,
-                [selected_experiment_id, selected_generation_id],
-            ).fetchdf()
+            try:
+                agent_aggressiveness_spread_df = con.execute(
+                    """
+                    SELECT
+                        v.round_number,
+                        v.agent_id,
+                        ap.strategy_type,
+                        v.aggressiveness,
+                        v.market_spread
+                    FROM agent_aggressiveness_vs_spread v
+                    JOIN agent_population ap
+                      ON v.experiment_id = ap.experiment_id
+                     AND v.generation_id = ap.generation_id
+                     AND v.agent_id = ap.agent_id
+                    WHERE v.experiment_id = ? AND v.generation_id = ?
+                    ORDER BY v.agent_id, v.round_number
+                    """,
+                    [selected_experiment_id, selected_generation_id],
+                ).fetchdf()
+            except Exception:
+                agent_aggressiveness_spread_df = con.execute(
+                    """
+                    SELECT
+                        v.round_number,
+                        v.agent_id,
+                        ap.strategy_type,
+                        v.aggressiveness,
+                        v.market_spread
+                    FROM agent_aggressiveness_vs_spread_derived v
+                    JOIN agent_population ap
+                      ON v.experiment_id = ap.experiment_id
+                     AND v.generation_id = ap.generation_id
+                     AND v.agent_id = ap.agent_id
+                    WHERE v.experiment_id = ? AND v.generation_id = ?
+                    ORDER BY v.agent_id, v.round_number
+                    """,
+                    [selected_experiment_id, selected_generation_id],
+                ).fetchdf()
 
             agent_order_count_df = con.execute(
                 """
@@ -630,13 +651,14 @@ def load_database_payload(db_path: str, experiment_id=None, generation_id=None) 
                     v.round_number,
                     v.agent_id,
                     ap.strategy_type,
-                    v.order_count
-                FROM agent_order_count_per_round v
+                    SUM(v.order_count) AS order_count
+                FROM agent_order_type_distribution_per_round v
                 JOIN agent_population ap
                   ON v.experiment_id = ap.experiment_id
                  AND v.generation_id = ap.generation_id
                  AND v.agent_id = ap.agent_id
                 WHERE v.experiment_id = ? AND v.generation_id = ?
+                GROUP BY v.round_number, v.agent_id, ap.strategy_type
                 ORDER BY v.agent_id, v.round_number
                 """,
                 [selected_experiment_id, selected_generation_id],
@@ -648,7 +670,9 @@ def load_database_payload(db_path: str, experiment_id=None, generation_id=None) 
                     v.round_number,
                     v.agent_id,
                     ap.strategy_type,
-                    v.behavior_change
+                    v.aggressiveness_change,
+                    v.order_qty_change,
+                    v.inventory_change
                 FROM agent_behavior_change_per_round v
                 JOIN agent_population ap
                   ON v.experiment_id = ap.experiment_id

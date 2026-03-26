@@ -267,11 +267,12 @@ def _build_strategy_performance_generation_records(round_records, generation_id)
     return grouped.to_dict("records")
 
 
-def run_experiment(config_overrides=None, progress_callback=None, run_analysis=True, disable_db_writes=False):
+def run_experiment(config_overrides=None, progress_callback=None, run_analysis=True, disable_db_writes=False, graphs_only=False):
     """
     Run a full evolutionary market experiment.
     """
     config = _merged_config(config_overrides)
+    disable_db_writes = bool(disable_db_writes or graphs_only)
     
     # OPTIMISATION 1: Only set up the database if we actually want to write to it
     if not disable_db_writes:

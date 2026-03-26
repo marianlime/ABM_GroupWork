@@ -83,18 +83,20 @@ def make_temp_duckdb_path(prefix: str) -> str:
 
 def run_single_sweep_process(args: tuple) -> tuple:
     """Run one sweep experiment in its own process and isolated temporary DuckDB."""
-    run_index, sweep_name, sweep_title, _settings, label, overrides, tmp_db = args
+    run_index, sweep_name, sweep_title, settings, label, overrides, tmp_db = args
+    graphs_only = bool(settings.get("graphs_only", False))
     try:
-        try:
-            os.unlink(tmp_db)
-        except OSError:
-            pass
-
         run_overrides = dict(overrides)
-        run_overrides["db_path"] = tmp_db
         run_overrides["experiment_name"] = label
         run_overrides["experiment_type"] = f"Sweep: {sweep_name}"
         run_overrides["run_notes"] = sweep_title
+
+        if not graphs_only:
+            try:
+                os.unlink(tmp_db)
+            except OSError:
+                pass
+            run_overrides["db_path"] = tmp_db
 
         from main import run_experiment
 
@@ -102,6 +104,7 @@ def run_single_sweep_process(args: tuple) -> tuple:
             config_overrides=run_overrides,
             progress_callback=None,
             run_analysis=False,
+            disable_db_writes=graphs_only,
         )
         run_df = prepare_sweep_plot_dataframe(
             result["generation_counts_df"].reset_index(drop=True).copy()
@@ -110,17 +113,18 @@ def run_single_sweep_process(args: tuple) -> tuple:
             "label": label,
             "experiment_id": result.get("experiment_id"),
             "data": run_df,
-            "temp_db_path": tmp_db,
+            "temp_db_path": tmp_db if not graphs_only else None,
         }
     except Exception:
-        try:
-            os.unlink(tmp_db)
-        except OSError:
-            pass
-        try:
-            os.unlink(f"{tmp_db}.wal")
-        except OSError:
-            pass
+        if tmp_db:
+            try:
+                os.unlink(tmp_db)
+            except OSError:
+                pass
+            try:
+                os.unlink(f"{tmp_db}.wal")
+            except OSError:
+                pass
         raise
 
 
