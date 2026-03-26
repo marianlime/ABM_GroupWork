@@ -4,7 +4,7 @@ import pytest
 import random
 from collections import Counter
 
-from sim.evolution import (
+from Simulation.evolution import (
     initial_population_from_counts,
     count_strategies,
     rank_agents_by_fitness,

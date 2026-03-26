@@ -1,7 +1,7 @@
 """
 test_strategies.py
 ------------------
-Unit tests for strategies in sim/strategies.py.
+Unit tests for strategies in Simulation/strategies.py.
 
 Run with:  python Tests/test_strategies.py -v
            (from the project root directory)
@@ -11,7 +11,7 @@ import unittest
 import sys
 import os
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'sim'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'Simulation'))
 
 from strategies import parameterised_informed, STRATEGIES
 

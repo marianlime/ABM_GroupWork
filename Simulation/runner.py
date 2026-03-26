@@ -1,15 +1,10 @@
-"""
-High-level runner that constructs a Game, steps through all rounds, computes
-time-averaged mark-to-market wealth, and wraps failures in a typed error.
-"""
-
 from .game import Game
 
 
 class GameExecutionError(RuntimeError):
-    """Raised when a game fails mid-run, preserving the round at which failure occurred."""
-    def __init__(self, current_round: int, n_rounds: int):
-        super().__init__(f"Game failed at round {current_round} of {n_rounds}")
+    # Exception for unexpected errors during game execution, contextualised with current round, total rounds and original exception.
+    def __init__(self, current_round: int, n_rounds: int): 
+        super().__init__(f"Game failed at round {current_round} of {n_rounds}") 
         self.current_round = current_round
         self.n_rounds = n_rounds
 
@@ -31,36 +26,18 @@ def play_game(
     S0: float | None = None,
     gbm_volatility: float = 0.2,
     fundamental_path=None,
-    seed=None
+    seed=None,
+    round_callback=None,
 ):
-    """
-    Run a single generation of the market simulation and return agent fitness scores.
 
-    - Constructs a Game, steps through n_rounds, applies trades to portfolios each round
-    - Computes time-averaged mark-to-market wealth as each agent's fitness score
-    - Raises GameExecutionError (wrapping the original exception) on any mid-run failure
-    - Returns (final_score, game) where final_score is a list of (agent_id, mean_wealth)
-    """
     # Create one Game instance for this generation.
-    current_game = Game(
-        population_spec=population_spec,
-        n_rounds=n_rounds,
-        total_initial_shares=total_initial_shares,
-        total_initial_cash=total_initial_cash,
-        experiment_id=experiment_id,
-        generation_id=generation_id,
-        info_param_distribution_type=info_param_distribution_type,
-        distribution_data=distribution_data,
-        signal_generator_noise_distribution=signal_generator_noise_distribution,
-        S0=S0,
-        gbm_volatility=gbm_volatility,
-        fundamental_path=fundamental_path,
-        seed=seed,
-    )
+    current_game = Game(population_spec=population_spec, n_rounds=n_rounds, total_initial_shares=total_initial_shares, total_initial_cash=total_initial_cash, experiment_id=experiment_id, generation_id=generation_id, info_param_distribution_type=info_param_distribution_type, distribution_data=distribution_data, signal_generator_noise_distribution=signal_generator_noise_distribution, S0=S0, gbm_volatility=gbm_volatility, fundamental_path=fundamental_path, seed=seed)
 
     try:
         # Run the market for all rounds in this game.
         while current_game.current_round < n_rounds:
+            if round_callback is not None:
+                round_callback(current_game.current_round + 1, n_rounds)
             _, _, trades = current_game.gather_orders_and_clear(
                 current_game.current_round
             )

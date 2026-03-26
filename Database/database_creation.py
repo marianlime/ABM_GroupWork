@@ -365,7 +365,7 @@ def create_database(DB_PATH):
      AND ar.round_number = mr.round_number;
     """)
 
-    # 3. Round-to-Round Change in Agent Behavior
+    # 3. Round-to-Round Change in Agent Behaviour
     con.execute("""
     CREATE VIEW IF NOT EXISTS agent_behavior_change_per_round AS
     SELECT

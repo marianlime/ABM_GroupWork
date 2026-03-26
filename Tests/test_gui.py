@@ -3,9 +3,9 @@ from uuid import uuid4
 
 from PySide6.QtWidgets import QApplication
 
-from database_creation import create_database
+from Database.database_creation import create_database
 from gui import CommandCenter, DatabaseLoaderWorker
-from SQL_Functions import (
+from Database.SQL_Functions import (
     insert_agent_population,
     insert_agent_round_rows,
     insert_experiment_row,
