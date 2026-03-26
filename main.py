@@ -9,96 +9,38 @@ import subprocess
 from collections import deque
 from copy import deepcopy
 from datetime import datetime, timezone
-
 import numpy as np
 import pandas as pd
 import ulid
+import sys
+from Analysis.analysis import (analyse_game_results,compute_strategy_info_param_stats,compute_strategy_mean_wealth, compute_strategy_param_stats)
+from Misc.defaults import PARAM_BOUNDS
+from Database.database_creation import create_database
+from Misc.defaults import DEFAULT_EXPERIMENT_CONFIG, DEFAULT_STRATEGY_PARAMS
+from Simulation.evolution import count_strategies, evolve_population, initial_population_from_counts
+from Simulation.gbm import simulate_gbm
+from Simulation.runner import GameExecutionError, play_game
+from Database.SQL_Functions import AsyncDuckDBWriter
 
-from analysis import (
-    analyse_game_results,
-    compute_strategy_info_param_stats,
-    compute_strategy_mean_wealth,
-    compute_strategy_param_stats,
-)
-from constants import PARAM_BOUNDS, COMPARISON_PARAM_SPECS, WEALTH_INFORMED_COL, WEALTH_ZI_COL
-from database_creation import create_database
-from sim.evolution import count_strategies, evolve_population, initial_population_from_counts
-from sim.gbm import simulate_gbm
-from sim.runner import GameExecutionError, play_game
-from SQL_Functions import AsyncDuckDBWriter
-
-
-DB_PATH = "experiment_results.duckdb"
-
-DEFAULT_STRATEGY_PARAMS = {
-    "qty_aggression": 0.5,
-    "signal_aggression": 0.5,
-}
-
-DEFAULT_EXPERIMENT_CONFIG = {
-    "db_path": DB_PATH,
-    "experiment_name": "Experiment Name",
-    "experiment_type": "A sub section for the experiment",
-    "run_notes": "Notes for the run",
-    "experiment_seed": 587756769879879879879,
-    "n_zi_agents": 65,
-    "n_parameterised_agents": 35,
-    "n_generations": 200,
-    "n_rounds": 200,
-    "total_initial_cash": 1000,
-    "total_initial_shares": 10,
-    "GBM_S0": 100,
-    "GBM_volatility": 0.20,
-    "GBM_drift": 0.05,
-    "info_param_distribution_type": "evenly_spaced",
-    "distribution_data": {"low": 0.0, "high": 2.0},
-    "signal_generator_noise_distribution": "lognormal",
-    "algorithm_name": "truncation",
-    "algorithm_params": {
-        "top_n_fraction": 0.3,
-        "bottom_k_fraction": 0.3,
-        "mutation_rate": 0.05,
-        "info_param_mutation_std": 0.01,
-        "info_param_bounds": (0.0, 2.0),
-        "param_bounds": PARAM_BOUNDS,
-        "default_strategy_params": DEFAULT_STRATEGY_PARAMS,
-        "frozen_params": set(),
-        "crossover_rate": 0.0,
-    },
-    "rolling_n": 10,
-}
-
-
-def _generate_ulid() -> str:
-    """Generate a new ULID string for use as an experiment identifier."""
-    return str(ulid.new())
+def _generate_ulid() -> str: #
+    return str(ulid.new()) #
 
 
 def _py_version() -> str:
-    """Return the current Python interpreter version string."""
-    import sys
-
     return str(sys.version)
 
-
 def _utc_now() -> str:
-    """Return the current UTC time formatted as a ISO-8601-style string."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _code_version() -> str:
-    """Return the git-derived version tag, or 'unknown' if git is unavailable."""
     try:
-        return subprocess.check_output(
-            ["git", "describe", "--tags", "--dirty", "--always"],
-            stderr=subprocess.DEVNULL,
-        ).decode().strip()
+        return subprocess.check_output(["git", "describe", "--tags", "--dirty", "--always"], stderr=subprocess.DEVNULL).decode().strip()
     except Exception:
         return "unknown"
 
 
 def _merged_config(overrides=None):
-    """Return a deep copy of DEFAULT_EXPERIMENT_CONFIG with any provided overrides applied."""
     config = deepcopy(DEFAULT_EXPERIMENT_CONFIG)
     if overrides:
         for key, value in overrides.items():
@@ -107,19 +49,11 @@ def _merged_config(overrides=None):
 
 
 def _quantile_or_nan(values, q):
-    """Return the q-th quantile of values, or NaN if the list is empty."""
     if not values:
         return np.nan
     return float(np.quantile(np.asarray(values, dtype=float), q))
 
-
 def _build_market_summary_records(game):
-    """
-    Build per-round market summary records from a completed game.
-
-    - Extracts bid/ask extremes, quantiles, fundamental price, and mid-price for each round
-    - Returns a list of dicts, one per round
-    """
     records = []
     market_by_round = _market_by_round_map(game)
 
@@ -130,40 +64,53 @@ def _build_market_summary_records(game):
         market = market_by_round.get(round_number, {})
         best_bid = market.get("best_bid")
         best_ask = market.get("best_ask")
-        mid_price = (
-            (best_bid + best_ask) / 2.0
-            if best_bid is not None and best_ask is not None
-            else np.nan
-        )
+        mid_price = ((best_bid + best_ask) / 2.0 if best_bid is not None and best_ask is not None else np.nan)
+        records.append(
+            {"round_number": round_number,"max_bid": float(max(buy_prices)) if buy_prices else np.nan,"max_sell": float(max(sell_prices)) if sell_prices else np.nan,"min_bid": float(min(buy_prices)) if buy_prices else np.nan,"min_sell": float(min(sell_prices)) if sell_prices else np.nan,"bid_price_q2": _quantile_or_nan(buy_prices, 0.5),"ask_price_q3": _quantile_or_nan(sell_prices, 0.75), "fundamental_price": float(game.fundamental_path[round_number]),"mid_price": float(mid_price) if not np.isnan(mid_price) else np.nan,})
+                
+    return records
+
+
+def _build_market_history_records(game):
+    """Build market-round records enriched with the fundamental price for each round."""
+    records = []
+    for record in game.market_round_records:
+        round_number = int(record["round_number"])
+        enriched = dict(record)
+        enriched["round_number"] = round_number
+        enriched["fundamental_price"] = float(game.fundamental_path[round_number])
+        records.append(enriched)
+    return records
+
+
+def _build_agent_population_records(game, generation_id: int):
+    """Build agent population snapshot records for one generation."""
+    records = []
+    for agent_id, agent in game.agents.items():
+        params = getattr(agent, "strategy_params", {}) or {}
         records.append(
             {
-                "round_number": round_number,
-                "max_bid": float(max(buy_prices)) if buy_prices else np.nan,
-                "max_sell": float(max(sell_prices)) if sell_prices else np.nan,
-                "min_bid": float(min(buy_prices)) if buy_prices else np.nan,
-                "min_sell": float(min(sell_prices)) if sell_prices else np.nan,
-                "bid_price_q2": _quantile_or_nan(buy_prices, 0.5),
-                "ask_price_q3": _quantile_or_nan(sell_prices, 0.75),
-                "fundamental_price": float(game.fundamental_path[round_number]),
-                "mid_price": float(mid_price) if not np.isnan(mid_price) else np.nan,
+                "generation_id": int(generation_id),
+                "agent_id": int(agent_id),
+                "strategy_type": str(agent.trader_type),
+                "info_param": float(agent.info_param) if getattr(agent, "info_param", None) is not None else np.nan,
+                "qty_aggression": float(params.get("qty_aggression")) if params.get("qty_aggression") is not None else np.nan,
+                "signal_aggression": float(params.get("signal_aggression")) if params.get("signal_aggression") is not None else np.nan,
+                "group_label": "noise" if agent.trader_type == "zi" else "informed",
+                "initial_cash": float(getattr(agent, "cash", np.nan)),
+                "initial_shares": float(getattr(agent, "shares", np.nan)),
             }
         )
-
     return records
 
 
 def _agent_types_map(game) -> dict:
-    """Return a mapping of agent_id to trader_type string for all agents in a game."""
     return {agent_id: agent.trader_type for agent_id, agent in game.agents.items()}
 
-
 def _market_by_round_map(game) -> dict:
-    """Index market_round_records by round_number for O(1) lookup."""
     return {int(r["round_number"]): r for r in game.market_round_records}
 
-
 def _groupby_strategy_round_mean(rows: list, value_col: str, output_col: str) -> list:
-    """Group rows by (round_number, strategy_type) and return the mean of value_col as output_col."""
     if not rows:
         return []
     df = pd.DataFrame(rows)
@@ -175,9 +122,7 @@ def _groupby_strategy_round_mean(rows: list, value_col: str, output_col: str) ->
     )
     return grouped.to_dict("records")
 
-
 def _build_strategy_profit_records(game):
-    """Compute mean per-round profit/loss by strategy type from agent round records."""
     agent_types = _agent_types_map(game)
     rows = []
     for record in game.agent_round_records:
@@ -193,13 +138,10 @@ def _build_strategy_profit_records(game):
         })
     return _groupby_strategy_round_mean(rows, "profit_loss", "avg_profit_loss")
 
-
 def _build_volume_share_records(game):
-    """Compute mean per-round volume share by strategy type, expressed as a fraction of total market volume."""
     agent_types = _agent_types_map(game)
     market_volume = {
-        int(r["round_number"]): float(r["volume"]) for r in game.market_round_records
-    }
+        int(r["round_number"]): float(r["volume"]) for r in game.market_round_records}
     rows = []
     for record in game.agent_round_records:
         round_number = int(record["round_number"])
@@ -210,7 +152,6 @@ def _build_volume_share_records(game):
             "volume_share": (float(record["executed_qty"]) / volume) if volume > 0 else 0.0,
         })
     return _groupby_strategy_round_mean(rows, "volume_share", "avg_volume_share")
-
 
 def _build_strategy_performance_round_records(game):
     """
@@ -332,7 +273,7 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
     """
     config = _merged_config(config_overrides)
     
-    # OPTIMIZATION 1: Only setup the database if we actually want to write to it
+    # OPTIMISATION 1: Only set up the database if we actually want to write to it
     if not disable_db_writes:
         create_database(config["db_path"])
         writer = AsyncDuckDBWriter(config["db_path"])
@@ -435,6 +376,18 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
                     config["signal_generator_noise_distribution"], S0=float(config["GBM_S0"]),
                     gbm_volatility=float(config["GBM_volatility"]), fundamental_path=fundamental_path,
                     seed=seed,
+                    round_callback=(
+                        lambda round_number, total_rounds: progress_callback({
+                            "event": "round_started",
+                            "experiment_id": experiment_id,
+                            "generation_id": generation_id,
+                            "generation_index": generation,
+                            "n_generations": int(config["n_generations"]),
+                            "round_number": int(round_number),
+                            "n_rounds": int(total_rounds),
+                        })
+                        if progress_callback is not None else None
+                    ),
                 )
             except GameExecutionError as exc:
                 if writer:
@@ -504,12 +457,15 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
                         **gen_entry,
                         "generation_id": generation_id,
                     },
-                    "market_history": list(game.market_round_records),
+                    "market_history": _build_market_history_records(game),
                     "market_summary": _build_market_summary_records(game),
                     "strategy_profit_per_round": _build_strategy_profit_records(game),
                     "volume_share_per_round": _build_volume_share_records(game),
                     "strategy_performance_round": strategy_performance_round,
                     "strategy_performance_generation": strategy_performance_generation,
+                    "population": _build_agent_population_records(game, generation_id),
+                    "agent_round": list(game.agent_round_records),
+                    "trade_execution": list(game.trade_execution_records),
                 })
 
             if generation < int(config["n_generations"]) - 1:

@@ -1,24 +1,24 @@
 """
-Post-run analysis and plotting for the ABM: per-generation metric helpers,
-cross-sectional wealth/parameter diagnostics, and evolutionary trend charts.
+Fast/flexible analysis of ABM run results.
 """
 
-from pathlib import Path
+#--- Library Imports for Analysis and Plotting ---
+from pathlib import Path 
 import re
-
 import numpy as np
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from numba import njit
+from Misc.defaults import PARAM_BOUNDS
+#--- Library Imports for Analysis and Plotting ---
 
-from constants import PARAM_BOUNDS
+
 
 PARAM_NAMES = list(PARAM_BOUNDS.keys())
-
-_ROLL = 10   # smoothing window (generations) used throughout
-_PLOT_OUTPUT_DIR = Path("analysis_outputs")
+ROLLING_WINDOW = 10   # smoothing window (generations) used throughout
+_PLOT_OUTPUT_DIR = Path(__file__).resolve().parent / "analysis_outputs"
 
 
 # ----------------------------
@@ -160,14 +160,8 @@ def _format_display_df(df: pd.DataFrame, display_cols: list[str]) -> pd.DataFram
 # Main analysis function
 # ----------------------------
 
-def analyse_game_results(
-    g,
-    final_score,
-    title_prefix="",
-    generation_counts_df=None,
-    rolling_games=None,
-    rolling_scores=None,
-):
+def analyse_game_results(g, final_score, title_prefix="", generation_counts_df=None, rolling_games=None, rolling_scores=None):
+    
     """
     Post-run diagnostics for the ABM run.
 
@@ -179,6 +173,7 @@ def analyse_game_results(
       plots use N×n_agents observations and round-by-round plots are averaged across N games
     - Returns a DataFrame with per-agent outcomes and strategy_params
     """
+    
     # ── Fundamentals for round-level plots ───────────────────────────────────
     fundamental = np.array(g.fundamental_path, dtype=float)
 
@@ -376,14 +371,14 @@ def analyse_game_results(
             for i, col in enumerate(mean_param_cols):
                 c      = colors[i % len(colors)]
                 raw    = generation_counts_df[col]
-                smooth = raw.rolling(window=_ROLL, min_periods=1, center=True).mean()
+                smooth = raw.rolling(window=ROLLING_WINDOW, min_periods=1, center=True).mean()
                 label  = col.replace("mean_", "")
                 ax.plot(gens, raw,    color=c, alpha=0.15, linewidth=0.8)
                 ax.plot(gens, smooth, color=c, linewidth=2.0, label=label)
             ax.set_xlabel("Generation")
             ax.set_ylabel("Mean parameter value")
             ax.set_title(f"{title_prefix}Evolved Parameter Means Over Generations "
-                         f"({_ROLL}-gen rolling mean)")
+                         f"({ROLLING_WINDOW}-gen rolling mean)")
             ax.legend(title="Parameter")
             plt.tight_layout()
             _save_and_close_plot(f"{title_prefix}parameter_means_over_generations")
@@ -398,7 +393,7 @@ def analyse_game_results(
                 param       = col.replace("std_", "")
                 lo, hi, _   = PARAM_BOUNDS[param]
                 raw_norm    = generation_counts_df[col] / (hi - lo)
-                smooth_norm = raw_norm.rolling(window=_ROLL, min_periods=1, center=True).mean()
+                smooth_norm = raw_norm.rolling(window=ROLLING_WINDOW, min_periods=1, center=True).mean()
                 ax.plot(gens, raw_norm,    color=c, alpha=0.15, linewidth=0.8)
                 ax.plot(gens, smooth_norm, color=c, linewidth=2.0,
                         linestyle="--", label=param)
@@ -415,12 +410,12 @@ def analyse_game_results(
 
         if w_inf is not None and w_zi is not None:
             raw_pct  = ((w_inf - w_zi) / w_zi.abs().replace(0, np.nan)) * 100.0
-            smoothed = raw_pct.rolling(window=_ROLL, min_periods=1, center=True).mean()
+            smoothed = raw_pct.rolling(window=ROLLING_WINDOW, min_periods=1, center=True).mean()
 
             fig, ax = plt.subplots(figsize=(10, 5))
             ax.plot(gens, raw_pct,  color="steelblue", alpha=0.25, linewidth=0.8)
             ax.plot(gens, smoothed, color="steelblue", linewidth=2.0,
-                    label=f"{_ROLL}-gen rolling mean")
+                    label=f"{ROLLING_WINDOW}-gen rolling mean")
             ax.axhline(0, color="black", linewidth=0.8, linestyle="--")
             ax.set_xlabel("Generation")
             ax.set_ylabel("Wealth premium (%)")
@@ -430,7 +425,7 @@ def analyse_game_results(
             _save_and_close_plot(f"{title_prefix}wealth_premium_over_generations")
 
             print(f"\nFinal-generation informed/ZI wealth premium: {raw_pct.iloc[-1]:.1f}%  "
-                  f"({_ROLL}-gen smoothed: {smoothed.iloc[-1]:.1f}%)")
+                  f"({ROLLING_WINDOW}-gen smoothed: {smoothed.iloc[-1]:.1f}%)")
 
         # ----- 7. Mean info_param over generations -----
         mean_ip_cols = [c for c in generation_counts_df.columns
@@ -508,13 +503,13 @@ def analyse_game_results(
             and "generation" in generation_counts_df.columns):
         gens = generation_counts_df["generation"]
         smooth_vol = generation_counts_df["mean_volume"].rolling(
-            window=_ROLL, min_periods=1, center=True).mean()
+            window=ROLLING_WINDOW, min_periods=1, center=True).mean()
         fig, ax = plt.subplots(figsize=(10, 4))
         ax.plot(gens, generation_counts_df["mean_volume"], color="teal", alpha=0.2, linewidth=0.8)
-        ax.plot(gens, smooth_vol, color="teal", linewidth=2.0, label=f"{_ROLL}-gen rolling mean")
+        ax.plot(gens, smooth_vol, color="teal", linewidth=2.0, label=f"{ROLLING_WINDOW}-gen rolling mean")
         ax.set_xlabel("Generation")
         ax.set_ylabel("Mean volume per round")
-        ax.set_title(f"{title_prefix}Mean Volume Over Generations ({_ROLL}-gen smooth)")
+        ax.set_title(f"{title_prefix}Mean Volume Over Generations ({ROLLING_WINDOW}-gen smooth)")
         ax.legend()
         plt.tight_layout()
         _save_and_close_plot(f"{title_prefix}mean_volume_over_generations")

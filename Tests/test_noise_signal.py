@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from sim.noise_signal import assign_info_param_set
+from Simulation.noise_signal import assign_info_param_set
 
 
 def test_assign_noise_uniform_shape_and_range():

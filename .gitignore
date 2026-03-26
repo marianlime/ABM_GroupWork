@@ -7,5 +7,6 @@ __pycache__/
 /.venv_linux
 /.vscode
 /Tests/.pytest_cache
+/Tests/pytest-temp
 /.pytest_cache
 *.duckdb

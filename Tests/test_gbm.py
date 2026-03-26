@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from sim.gbm import rng_from_string, simulate_gbm
+from Simulation.gbm import rng_from_string, simulate_gbm
 
 
 def test_rng_same_seed_same_output():

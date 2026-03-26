@@ -3,52 +3,28 @@ PySide6 GUI for the agent-based market simulation: experiment configuration,
 live generation monitoring, database browsing, and multi-experiment comparison.
 """
 
+import html
 import sys
+import os
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from pathlib import Path
-
-import duckdb
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
 from PySide6.QtGui import QColor
 from PySide6.QtCore import QThread, Qt, Signal, QTimer
-from PySide6.QtWidgets import (
-    QApplication,
-    QCheckBox,
-    QComboBox,
-    QFormLayout,
-    QGroupBox,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QListWidget,
-    QListWidgetItem,
-    QMainWindow,
-    QMessageBox,
-    QPushButton,
-    QPlainTextEdit,
-    QScrollArea,
-    QSlider,
-    QTableWidget,
-    QTableWidgetItem,
-    QTabWidget,
-    QVBoxLayout,
-    QWidget,
-)
-
-from constants import COMPARISON_PARAM_SPECS, WEALTH_INFORMED_COL, WEALTH_ZI_COL
-from database_creation import create_database
-from main import DEFAULT_EXPERIMENT_CONFIG, run_experiment
+from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,QPlainTextEdit, QScrollArea, QSlider, QTableWidget, QTableWidgetItem, QTabWidget,QVBoxLayout, QWidget)
+from Misc.defaults import COMPARISON_PARAM_SPECS, WEALTH_INFORMED_COLUMN, WEALTH_ZI_COLUMN
+from Database.SQL_Functions import humanise_sql_object_name, load_comparison_payload, load_database_payload
+from Misc.defaults import DB_PATH, DEFAULT_EXPERIMENT_CONFIG
+from Misc.sweep_runtime import (load_partial_sweep_run, make_temp_duckdb_path, merge_experiments_from_temp_dbs, peek_partial_sweep_progress, run_single_sweep_process)
+from main import run_experiment
 
 
-DEFAULT_DB_PATH = "experiment_results.duckdb"
-SQL_TAB_PREVIEW_ROWS = 1000
+DEFAULT_DB_PATH = DB_PATH
 GRAPH_BACKGROUND = "#2b2b2b"
 GRAPH_FOREGROUND = "#ffffff"
-APP_THEMES = {
-    "dark": {
-        "window_bg": "#171b21",
-        "surface_bg": "#1f252d",
+APP_THEMES = {"dark": {"window_background": "#171b21", "surface_bg": "#1f252d",
         "surface_alt_bg": "#262d37",
         "input_bg": "#11161c",
         "border": "#3b4654",
@@ -68,7 +44,7 @@ APP_THEMES = {
         "compare_button": "#6a5acd",
     },
     "light": {
-        "window_bg": "#f3f5f8",
+        "window_background": "#f3f5f8",
         "surface_bg": "#ffffff",
         "surface_alt_bg": "#e9eef5",
         "input_bg": "#ffffff",
@@ -89,16 +65,9 @@ APP_THEMES = {
         "compare_button": "#5a67d8",
     },
 }
-STRATEGY_COLORS = {
-    "zi": (255, 140, 0),
-    "parameterised_informed": (30, 144, 255),
-}
-COMPARISON_WEALTH_DIFF_SPEC = (
-    "wealth_difference",
-    "Informed Wealth - ZI Wealth",
-)
-PLOT_MATH_NOTES = {
-    "Mean Strategy Parameters Across Generations": "q<sub>g</sub>, s<sub>g</sub>",
+STRATEGY_COLORS = {"zi": "#FFA500", "parameterised_informed": "#1E90FF"}
+COMPARISON_WEALTH_DIFF_SPEC = ("wealth_difference", "Informed Wealth - ZI Wealth",)
+PLOT_MATH_NOTES = {"Mean Strategy Parameters Across Generations": "q<sub>g</sub>, s<sub>g</sub>",
     "Mean Wealth by Strategy": "W&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>i</sub>[cash + inv p<sub>T</sub>]",
     "Mean Info_Param by Strategy": "&theta;&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>i</sub>[&theta;<sub>i</sub>]",
     "Market Summary by Round": "bid/ask extrema, F<sub>t</sub>, mid<sub>t</sub>",
@@ -116,18 +85,18 @@ PLOT_MATH_NOTES = {
     "Candlestick View": "(O<sub>t</sub>, H<sub>t</sub>, L<sub>t</sub>, C<sub>t</sub>)",
     "Trade Network": "E<sub>t</sub>(i,j) = notional flow",
     "Order Imbalance and Spread": "I<sub>t</sub> = (D<sub>t</sub> - S<sub>t</sub>)/(D<sub>t</sub> + S<sub>t</sub>)",
-    "Participation and Volume": "V<sub>t</sub>, N<sub>trades,t</sub>, N<sub>active,t</sub>",
+    "Participation": "N<sub>trades,t</sub>, N<sub>active,t</sub>",
+    "Volume": "V<sub>t</sub>",
     "Profit Change vs Prev Gen": "&Delta;&pi;<sub>g</sub><sup>(s)</sup> = &pi;<sub>g</sub><sup>(s)</sup> - &pi;<sub>g-1</sub><sup>(s)</sup>",
     "Info_Param per Agent": "&theta;<sub>i,g</sub>",
     "Qty_Aggression per Agent": "q<sub>i,g</sub>",
-    "Signal_Aggression per Agent": "s<sub>i,g</sub>",
-}
+    "Signal_Aggression per Agent": "s<sub>i,g</sub>"}
 PLOT_BRIEF_NOTES = {
-    "Mean Strategy Parameters Across Generations": "Shows how the learned strategy aggressiveness parameters evolve generation by generation.",
+    "Mean Strategy Parameters Across Generations": "Shows how the learnt strategy aggressiveness parameters evolve generation by generation.",
     "Mean Wealth by Strategy": "Compares average end-of-generation wealth for informed and zero-intelligence traders.",
     "Mean Info_Param by Strategy": "Tracks the average information parameter carried by each strategy group across generations.",
     "Market Summary by Round": "Summarises how bids, asks, the fundamental value, and the mid price move through a generation.",
-    "Average Profit per Round: ZI vs Parameterised": "Shows round-by-round average profit so you can compare trading performance within a generation.",
+    "Average Profit per Round: ZI vs Parameterised": "Shows round-by-round average profit to compare trading performance within a generation.",
     "Average Agent Volume Share per Round": "Measures how much of each round's executed volume is supplied by each strategy group.",
     "Qty Aggression": "Shows the cross-run mean quantity aggressiveness over generations.",
     "Signal Aggression": "Shows the cross-run mean signal aggressiveness over generations.",
@@ -141,89 +110,80 @@ PLOT_BRIEF_NOTES = {
     "Candlestick View": "Shows a compact open-high-low-close style summary of market prices by round.",
     "Trade Network": "Maps who traded with whom, with edge thickness reflecting notional flow.",
     "Order Imbalance and Spread": "Compares buy-sell pressure with the prevailing quoted spread over time.",
-    "Participation and Volume": "Shows how trading activity changes through the generation using volume, trades, and active participants.",
+    "Participation": "Shows how market participation changes through the generation using number of trades and active participants.",
+    "Volume": "Shows how total traded volume changes through the generation.",
     "Profit Change vs Prev Gen": "Shows whether each strategy's generation-level profit is improving or deteriorating versus the previous generation.",
     "Info_Param per Agent": "Tracks each informed agent's information parameter across generations.",
     "Qty_Aggression per Agent": "Tracks each informed agent's quantity aggressiveness across generations.",
     "Signal_Aggression per Agent": "Tracks each informed agent's signal aggressiveness across generations.",
 }
-COMPARISON_LINE_COLORS = [
-    (255, 140, 0),
-    (30, 144, 255),
-    (220, 20, 60),
-    (46, 139, 87),
-    (218, 165, 32),
-    (186, 85, 211),
-    (0, 206, 209),
-    (205, 92, 92),
-]
+
+COMPARISON_LINE_COLORS: list[tuple[int, int, int]] = []
 SWEEP_COMPARISON_OUTPUT_DIR = Path("comparison_outputs")
-SWEEP_PARAM_SUBPLOTS = [
-    ("mean_qty_aggression", "Qty Aggression"),
-    ("mean_signal_aggression", "Signal Aggression"),
-    ("mean_info_param_parameterised_informed", "Info Param (informed)"),
-]
-SWEEP_STD_SUBPLOTS = [
-    ("std_qty_aggression", "Qty Aggression Std Dev"),
-    ("std_signal_aggression", "Signal Aggression Std Dev"),
-    ("std_info_param_parameterised_informed", "Info Param Std Dev"),
-]
-SWEEP_COLOR_STOPS = [
-    (68, 1, 84),
-    (71, 44, 122),
-    (59, 81, 139),
-    (44, 113, 142),
-    (33, 144, 141),
-    (39, 173, 129),
-    (92, 200, 99),
-    (170, 220, 50),
-    (253, 231, 37),
-]
-SWEEP_DEFAULTS = {
-    "population": {
-        "total_agents": 100,
-        "n_generations": 100,
-        "n_rounds": 50,
-        "fixed_drift": 0.02,
-        "fixed_volatility": 0.10,
-        "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20",
-        "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20",
-        "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50",
-    },
-    "drift": {
-        "total_agents": 100,
-        "n_generations": 100,
-        "n_rounds": 50,
-        "fixed_drift": 0.02,
-        "fixed_volatility": 0.10,
-        "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20",
-        "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20",
-        "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50",
-    },
-    "volatility": {
-        "total_agents": 100,
-        "n_generations": 100,
-        "n_rounds": 50,
-        "fixed_drift": 0.02,
-        "fixed_volatility": 0.10,
-        "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20",
-        "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20",
-        "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50",
-    },
-}
+SWEEP_PARAM_SUBPLOTS = [("mean_qty_aggression", "Qty Aggression"), ("mean_signal_aggression", "Signal Aggression"), ("mean_info_param_parameterised_informed", "Info Param (informed)")]
+SWEEP_STD_SUBPLOTS = [("std_qty_aggression", "Qty Aggression Std Dev"), ("std_signal_aggression", "Signal Aggression Std Dev"), ("std_info_param_parameterised_informed", "Info Param Std Dev")]
+SWEEP_COLOR_STOPS = [(68, 1, 84),(71, 44, 122), (59, 81, 139), (44, 113, 142), (33, 144, 141), (39, 173, 129), (92, 200, 99), (170, 220, 50), (253, 231, 37)]
+SWEEP_DEFAULTS = {"population": {"total_agents": 100, "n_generations": 100, "n_rounds": 50, "max_parallel_workers": 4, "fixed_drift": 0.02, "fixed_volatility": 0.10, "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20", "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20", "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50"},
+                  "drift": {"total_agents": 100, "n_generations": 100, "n_rounds": 50, "max_parallel_workers": 4, "fixed_drift": 0.02, "fixed_volatility": 0.10, "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20", "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20", "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50"},
+                  "volatility": {"total_agents": 100, "n_generations": 100, "n_rounds": 50, "max_parallel_workers": 4, "fixed_drift": 0.02, "fixed_volatility": 0.10, "population_values": "20:80,30:70,40:60,50:50,60:40,70:30,80:20", "drift_values": "-0.05,-0.01,0.00,0.01,0.05,0.10,0.20", "volatility_values": "0.00,0.01,0.05,0.10,0.20,0.50"}}
+
+def _generate_comparison_line_colors(n: int = 8, min_dist: float = 80.0) -> list[tuple[int, int, int]]:
+
+    strategy_colours = []
+    for value in STRATEGY_COLORS.values():
+        if isinstance(value, str):
+            hex_value = value.lstrip("#")
+            if len(hex_value) == 6:
+                strategy_colours.append(tuple(int(hex_value[i:i + 2], 16) for i in (0, 2, 4)))
+        elif isinstance(value, (tuple, list)) and len(value) == 3:
+            strategy_colours.append(tuple(int(channel) for channel in value))
+
+    if n == 1:
+        midpoint = SWEEP_COLOR_STOPS[len(SWEEP_COLOR_STOPS) // 2]
+        return [tuple(int(channel) for channel in midpoint)]
+
+    colours: list[tuple[int, int, int]] = []
+    last_index = len(SWEEP_COLOR_STOPS) - 1
+    for idx in range(n):
+        scaled = (idx / (n - 1)) * last_index
+        low_index = int(np.floor(scaled))
+        high_index = min(low_index + 1, last_index)
+        ratio = scaled - low_index
+        start = SWEEP_COLOR_STOPS[low_index]
+        end = SWEEP_COLOR_STOPS[high_index]
+        colour = tuple(
+            int(round(start[channel] + (end[channel] - start[channel]) * ratio))
+            for channel in range(3)
+        )
+
+        attempts = 0
+        while attempts < 48:
+            too_close_to_strategy = any(
+                sum((float(colour[channel]) - float(strategy[channel])) ** 2 for channel in range(3)) ** 0.5 < min_dist
+                for strategy in strategy_colours)
+            too_close_to_existing = any(
+                sum((float(colour[channel]) - float(existing[channel])) ** 2 for channel in range(3)) ** 0.5 < 10
+                for existing in colours)
+            if not too_close_to_strategy and not too_close_to_existing:
+                break
+            step = 7 + (attempts % 7)
+            colour = (
+                (colour[0] + step) % 256,
+                (colour[1] + step * 2) % 256,
+                (colour[2] + step * 3) % 256,
+            )
+            attempts += 1
+
+        colours.append(colour)
+
+    return colours
 
 
-def _humanize_sql_object_name(name: str) -> str:
-    replacements = {
-        "id": "ID",
-        "gbm": "GBM",
-        "zi": "ZI",
-        "qty": "Qty",
-        "sql": "SQL",
-        "avg": "Avg",
-    }
-    return " ".join(replacements.get(part, part.capitalize()) for part in name.split("_"))
+# Populate COMPARISON_LINE_COLORS as an 8-colour gradient avoiding strategy colours.
+COMPARISON_LINE_COLORS = _generate_comparison_line_colors(8) 
 
+# Convert generated RGB tuples to hex strings for consistent usage in the GUI.
+COMPARISON_LINE_COLORS = [f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}" for c in COMPARISON_LINE_COLORS]
 
 def _style_plot(plot):
     plot.showGrid(x=True, y=True, alpha=0.25)
@@ -231,10 +191,8 @@ def _style_plot(plot):
     plot.getAxis("bottom").enableAutoSIPrefix(False)
     plot.getAxis("bottom").setStyle(tickTextOffset=6, autoExpandTextSpace=True)
 
-
 def _resolve_plot_math_note(base_title: str) -> str:
-    return PLOT_MATH_NOTES.get(base_title, "y = f(x)")
-
+    return PLOT_MATH_NOTES.get(base_title, "")
 
 def _resolve_plot_brief_note(base_title: str, bottom_text: str | None = None, left_text: str | None = None) -> str:
     if base_title in PLOT_BRIEF_NOTES:
@@ -246,30 +204,36 @@ def _resolve_plot_brief_note(base_title: str, bottom_text: str | None = None, le
     return "Shows the plotted series over the selected index."
 
 
-def _set_plot_bottom_label(
-    plot,
-    x_label: str,
-    legend_items=None,
-    text_color: str = GRAPH_FOREGROUND,
-):
+def _set_plot_bottom_label(plot,x_label: str,legend_items=None,text_color: str = GRAPH_FOREGROUND,):
     label_html = f"<span style='color: {text_color};'>{x_label}</span>"
     if legend_items:
-        legend_html = "<br>".join(
-            f"<span style='color: rgb({color[0]}, {color[1]}, {color[2]});'>&#9632; {name}</span>"
-            for name, color in legend_items
-        )
-        label_html += f"<br><span style='font-size: 9pt;'>{legend_html}</span>"
+        legend_html = "".join(f"<span style='color: rgb({color[0]}, {color[1]}, {color[2]}); display: inline-block; margin: 0 14px 4px 0; white-space: normal;'>&#9632; {_wrap_label_text_for_html(name)}</span>"for name, color in legend_items)
+        label_html += ("<br>" f"<span style='font-size: 9pt; display: block;'>{legend_html}</span>")
     plot.setLabel("bottom", label_html)
     plot.getAxis("bottom").setHeight(54 if legend_items else 34)
+
+
+def _wrap_label_text_for_html(text) -> str:
+    escaped = html.escape(str(text))
+    for plain, wrapped in {" | ": " |<wbr> ",", ": ",<wbr> "," / ": " /<wbr> ",": ": ":<wbr> ","_": "_<wbr>",}.items():
+        escaped = escaped.replace(plain, wrapped)
+
+    parts = []
+    for token in escaped.split(" "):
+        if len(token) > 12 and all(ch.isalnum() or ch in "_-" or ch == ";" for ch in token):
+            token = "<wbr>".join(token[i:i + 8] for i in range(0, len(token), 8))
+        parts.append(token)
+    return " ".join(parts)
 
 
 def _format_run_label_html(legend_items, text_color: str = GRAPH_FOREGROUND):
     if not legend_items:
         return f"<span style='color: {text_color};'>No runs selected.</span>"
-    return "<br>".join(
-        f"<span style='color: rgb({color[0]}, {color[1]}, {color[2]});'>&#9632; {name}</span>"
+    items_html = "".join(
+        f"<span style='color: rgb({color[0]}, {color[1]}, {color[2]}); display: inline-block; margin: 0 14px 6px 0; white-space: normal;'>&#9632; {_wrap_label_text_for_html(name)}</span>"
         for name, color in legend_items
     )
+    return f"<div style='color: {text_color}; white-space: normal;'>{items_html}</div>"
 
 
 def _pair_trade_links_from_agent_round(agent_round_df: pd.DataFrame) -> pd.DataFrame:
@@ -282,24 +246,26 @@ def _pair_trade_links_from_agent_round(agent_round_df: pd.DataFrame) -> pd.DataF
 
     records = []
     for round_number, round_df in agent_round_df.groupby("round_number", sort=True):
-        buyers = [
-            {
+        buyers = []
+        sellers = []
+        for round_df_index, row in round_df.iterrows():
+            if not pd.notna(row["executed_qty"]) or float(row["executed_qty"]) <= 0:
+                continue
+
+            order_entry = {
                 "agent_id": int(row["agent_id"]),
                 "remaining_qty": float(row["executed_qty"]),
-                "price": float(row["executed_price_avg"]) if pd.notna(row["executed_price_avg"]) else float("nan"),
+                "price": (
+                    float(row["executed_price_avg"])
+                    if pd.notna(row["executed_price_avg"])
+                    else float("nan")
+                ),
             }
-            for _, row in round_df.iterrows()
-            if row["action"] == "buy" and pd.notna(row["executed_qty"]) and float(row["executed_qty"]) > 0
-        ]
-        sellers = [
-            {
-                "agent_id": int(row["agent_id"]),
-                "remaining_qty": float(row["executed_qty"]),
-                "price": float(row["executed_price_avg"]) if pd.notna(row["executed_price_avg"]) else float("nan"),
-            }
-            for _, row in round_df.iterrows()
-            if row["action"] == "sell" and pd.notna(row["executed_qty"]) and float(row["executed_qty"]) > 0
-        ]
+
+            if row["action"] == "buy":
+                buyers.append(order_entry)
+            elif row["action"] == "sell":
+                sellers.append(order_entry)
 
         buyer_idx = 0
         seller_idx = 0
@@ -342,11 +308,9 @@ def _pair_trade_links_from_agent_round(agent_round_df: pd.DataFrame) -> pd.DataF
     return pd.DataFrame(records)
 
 
-def _ensure_database_exists(db_path: str) -> bool:
-    db_file = Path(db_path)
-    database_created = not db_file.exists()
-    create_database(str(db_file))
-    return database_created
+
+def _run_experiment(*args, **kwargs):
+    return run_experiment(*args, **kwargs)
 
 
 def _parse_float_list(raw_values: str) -> list[float]:
@@ -390,7 +354,6 @@ def _interpolate_color(start_color, end_color, ratio: float):
         for start, end in zip(start_color, end_color)
     )
 
-
 def _sweep_colors(n_runs: int) -> list[tuple[int, int, int]]:
     if n_runs <= 0:
         return []
@@ -412,7 +375,6 @@ def _sweep_colors(n_runs: int) -> list[tuple[int, int, int]]:
             )
         )
     return colors
-
 
 def _build_sweep_title(sweep_name: str, settings: dict) -> str:
     total_agents = int(settings["total_agents"])
@@ -506,46 +468,13 @@ def _build_sweep_run_args(sweep_name: str, settings: dict) -> tuple[str, list[tu
     return title, run_args
 
 
-def _prepare_sweep_plot_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """Trim and normalize sweep data to the columns the comparison plots actually consume."""
-    if df is None or df.empty:
-        return pd.DataFrame()
-
-    prepared_df = df.copy()
-    if "generation" not in prepared_df.columns and "generation_id" in prepared_df.columns:
-        prepared_df["generation"] = prepared_df["generation_id"].astype(int) - 1
-
-    needed_cols = {"generation", "generation_id", WEALTH_INFORMED_COL, WEALTH_ZI_COL}
-    for metric_key, _ in SWEEP_PARAM_SUBPLOTS:
-        needed_cols.add(metric_key)
-    for metric_key, _ in SWEEP_STD_SUBPLOTS:
-        needed_cols.add(metric_key)
-
-    keep_cols = [col for col in prepared_df.columns if col in needed_cols]
-    if not keep_cols:
-        return pd.DataFrame()
-
-    prepared_df = prepared_df[keep_cols].copy()
-    if "generation" in prepared_df.columns:
-        prepared_df["generation"] = prepared_df["generation"].astype(int)
-    if "generation_id" in prepared_df.columns:
-        prepared_df["generation_id"] = prepared_df["generation_id"].astype(int)
-
-    numeric_cols = [col for col in prepared_df.columns if col not in {"generation", "generation_id"}]
-    for col in numeric_cols:
-        prepared_df[col] = pd.to_numeric(prepared_df[col], errors="coerce")
-
-    sort_cols = ["generation"] if "generation" in prepared_df.columns else ["generation_id"]
-    return prepared_df.sort_values(sort_cols).reset_index(drop=True)
-
-
 def _comparison_payload_to_runs(experiments_df: pd.DataFrame, comparison_df: pd.DataFrame) -> list[dict]:
     if experiments_df.empty or comparison_df.empty:
         return []
 
     labels_by_id = {
-        str(row["experiment_id"]): f"{row['experiment_name']} | {str(row['experiment_id'])[:8]}"
-        for _, row in experiments_df.iterrows()
+        str(row["experiment_id"]): f"{row['experiment_name']} • {str(row['experiment_id'])[:8]}"
+        for experiment_row_index, row in experiments_df.iterrows()
     }
     runs = []
     for experiment_id, run_df in comparison_df.groupby("experiment_id", sort=False):
@@ -560,697 +489,112 @@ def _comparison_payload_to_runs(experiments_df: pd.DataFrame, comparison_df: pd.
         )
     return runs
 
+def _build_live_strategy_evolution_df(strategy_generation_df: pd.DataFrame) -> pd.DataFrame:
+    if strategy_generation_df.empty:
+        return pd.DataFrame()
+    required_cols = {"generation_id", "strategy_type", "avg_profit_loss_per_gen"}
+    if not required_cols.issubset(strategy_generation_df.columns):
+        return pd.DataFrame()
+    evolution_df = (
+        strategy_generation_df[list(required_cols)]
+        .copy()
+        .sort_values(["strategy_type", "generation_id"])
+    )
+    evolution_df["profit_change_from_prev_gen"] = (
+        evolution_df.groupby("strategy_type")["avg_profit_loss_per_gen"].diff()
+    )
+    return evolution_df.sort_values(["generation_id", "strategy_type"]).reset_index(drop=True)
+
+def _build_live_agent_views(population_df: pd.DataFrame, agent_round_df: pd.DataFrame, market_history_df: pd.DataFrame,) -> dict[str, pd.DataFrame]:
+    empty = pd.DataFrame()
+    result = {"agent_profit_loss": empty, "agent_fill_rate": empty, "agent_inventory_risk": empty, "agent_inventory_turnover": empty, "agent_relative_performance": empty, "agent_signal_accuracy": empty, "agent_volume_share": empty, "agent_aggressiveness_spread": empty, "agent_behavior_change": empty, "agent_execution_price_deviation": empty, "agent_avg_trade_size": empty}
+    if population_df.empty or agent_round_df.empty:
+        return result
+    population_cols = {"agent_id", "strategy_type"}
+    if not population_cols.issubset(population_df.columns):
+        return result
+    round_df = agent_round_df.copy()
+    if "round_number" not in round_df.columns or "agent_id" not in round_df.columns:
+        return result
+    round_df["round_number"] = pd.to_numeric(round_df["round_number"], errors="coerce")
+    round_df["agent_id"] = pd.to_numeric(round_df["agent_id"], errors="coerce")
+    merged_df = round_df.merge(population_df[["agent_id", "strategy_type"]].copy(),on="agent_id", how="left",)
+    market_merge_cols = ["round_number", "p_t", "best_bid", "best_ask", "volume", "fundamental_price"]
+    market_subset = market_history_df[[col for col in market_merge_cols if col in market_history_df.columns]].copy()
+    if "round_number" in market_subset.columns:
+        market_subset["round_number"] = pd.to_numeric(market_subset["round_number"], errors="coerce")
+        merged_df = merged_df.merge(market_subset, on="round_number", how="left")
+    reference_price = merged_df.get("p_t", pd.Series(dtype=float)).fillna(merged_df.get("fundamental_price", pd.Series(dtype=float))).fillna(0.0)
+    executed_qty = pd.to_numeric(merged_df.get("executed_qty"), errors="coerce")
+    order_qty = pd.to_numeric(merged_df.get("order_qty"), errors="coerce")
+    inventory_start = pd.to_numeric(merged_df.get("inventory_start"), errors="coerce")
+    inventory_end = pd.to_numeric(merged_df.get("inventory_end"), errors="coerce")
+    cash_start = pd.to_numeric(merged_df.get("cash_start"), errors="coerce")
+    cash_end = pd.to_numeric(merged_df.get("cash_end"), errors="coerce")
+    executed_price_avg = pd.to_numeric(merged_df.get("executed_price_avg"), errors="coerce")
+    signal = pd.to_numeric(merged_df.get("signal"), errors="coerce")
+    aggressiveness = pd.to_numeric(merged_df.get("aggressiveness"), errors="coerce")
+    best_bid = pd.to_numeric(merged_df.get("best_bid"), errors="coerce")
+    best_ask = pd.to_numeric(merged_df.get("best_ask"), errors="coerce")
+    volume = pd.to_numeric(merged_df.get("volume"), errors="coerce")
+    fundamental_price = pd.to_numeric(merged_df.get("fundamental_price"), errors="coerce")
+    profit_loss = cash_end + inventory_end * reference_price - cash_start - inventory_start * reference_price
+    fill_rate = np.where(order_qty > 0, executed_qty / order_qty, np.nan)
+    avg_abs_inventory = (inventory_start.abs() + inventory_end.abs()) / 2.0
+    inventory_turnover = np.where(avg_abs_inventory != 0, (inventory_end - inventory_start).abs() / avg_abs_inventory, np.nan)
+    signal_accuracy = (signal - fundamental_price).abs()
+    market_spread = (best_ask - best_bid).abs()
+    execution_price_deviation = np.where(reference_price.abs() > 1e-12, (executed_price_avg - reference_price) / reference_price.abs(), np.nan)
+    volume_share = np.where(volume > 0, executed_qty / volume, 0.0)
+    avg_trade_size = executed_qty
+    inventory_risk = inventory_end.abs()
+    ordered_df = merged_df.sort_values(["agent_id", "round_number"]).copy()
+    ordered_df["aggressiveness_change"] = ordered_df.groupby("agent_id")["aggressiveness"].diff()
+    ordered_df["order_qty_change"] = ordered_df.groupby("agent_id")["order_qty"].diff()
+    ordered_df["inventory_change"] = ordered_df.groupby("agent_id")["inventory_end"].diff()
+    base_cols = ordered_df[["round_number", "agent_id", "strategy_type"]].copy()
+    result["agent_profit_loss"] = base_cols.assign(profit_loss=profit_loss.values)
+    result["agent_fill_rate"] = base_cols.assign(fill_rate=fill_rate)
+    result["agent_inventory_risk"] = base_cols.assign(inventory_risk=inventory_risk.values)
+    result["agent_inventory_turnover"] = base_cols.assign(inventory_turnover=inventory_turnover)
+    round_avg_profit = result["agent_profit_loss"].groupby("round_number", as_index=False)["profit_loss"].mean().rename(columns={"profit_loss": "round_avg_profit"})
+    result["agent_relative_performance"] = result["agent_profit_loss"].merge(round_avg_profit, on="round_number", how="left")
+    result["agent_relative_performance"]["relative_profit_loss"] = (result["agent_relative_performance"]["profit_loss"] - result["agent_relative_performance"]["round_avg_profit"])
+    result["agent_relative_performance"] = result["agent_relative_performance"][["round_number", "agent_id", "strategy_type", "relative_profit_loss"]]
+    result["agent_signal_accuracy"] = base_cols.assign(signal_accuracy=signal_accuracy.values)
+    result["agent_volume_share"] = base_cols.assign(volume_share=volume_share)
+    result["agent_aggressiveness_spread"] = base_cols.assign(aggressiveness=aggressiveness.values, market_spread=market_spread.values)
+    result["agent_behavior_change"] = ordered_df[["round_number", "agent_id", "strategy_type", "aggressiveness_change", "order_qty_change", "inventory_change"]].copy()
+    result["agent_execution_price_deviation"] = base_cols.assign(execution_price_deviation=execution_price_deviation)
+    result["agent_avg_trade_size"] = base_cols.assign(avg_trade_size=avg_trade_size.values)
+    return result
 
 class DatabaseLoaderWorker(QThread):
-    """Background thread that loads experiment and generation data from a DuckDB file."""
-
     loaded = Signal(dict)
     error = Signal(str)
 
     def __init__(self, db_path, experiment_id=None, generation_id=None):
+        #Constructer - calls QThread Initialiser and stores database path and experiment/generation_id
         super().__init__()
         self.db_path = db_path
         self.experiment_id = experiment_id
         self.generation_id = generation_id
 
     def run(self):
+        #Calls worker method to read data
+        #Emits loaded signal with returned payload
+        #Catches exception and emits error signal
         try:
             self.loaded.emit(self._load_payload())
-        except Exception as exc:
-            self.error.emit(str(exc))
+        except Exception as exception:
+            self.error.emit(str(exception))
 
     def _load_payload(self):
-        db_file = Path(self.db_path)
-        database_created = _ensure_database_exists(str(db_file))
-
-        con = duckdb.connect(str(db_file))
-        try:
-            experiments_df = con.execute(
-                """
-                SELECT
-                    experiment_id,
-                    experiment_name,
-                    experiment_type,
-                    creation_time,
-                    completion_time,
-                    n_generations,
-                    n_rounds,
-                    n_agents,
-                    algorithm_name
-                FROM experiments
-                ORDER BY creation_time DESC
-                """
-            ).fetchdf()
-
-            selected_experiment_id = self.experiment_id
-            if experiments_df.empty:
-                selected_experiment_id = None
-            elif selected_experiment_id not in set(experiments_df["experiment_id"].tolist()):
-                selected_experiment_id = str(experiments_df.iloc[0]["experiment_id"])
-
-            generations_df = pd.DataFrame()
-            wealth_history_df = pd.DataFrame()
-            mean_info_param_df = pd.DataFrame()
-            strategy_generation_df = pd.DataFrame()
-            market_history_df = pd.DataFrame()
-            market_summary_df = pd.DataFrame()
-            strategy_profit_round_df = pd.DataFrame()
-            volume_share_round_df = pd.DataFrame()
-            agent_strategy_evolution_df = pd.DataFrame()
-            agent_profit_loss_df = pd.DataFrame()
-            agent_fill_rate_df = pd.DataFrame()
-            agent_inventory_risk_df = pd.DataFrame()
-            agent_inventory_turnover_df = pd.DataFrame()
-            agent_relative_performance_df = pd.DataFrame()
-            agent_signal_accuracy_df = pd.DataFrame()
-            agent_volume_share_df = pd.DataFrame()
-            agent_aggressiveness_spread_df = pd.DataFrame()
-            agent_order_count_df = pd.DataFrame()
-            agent_behavior_change_df = pd.DataFrame()
-            agent_execution_price_deviation_df = pd.DataFrame()
-            agent_avg_trade_size_df = pd.DataFrame()
-            agent_info_param_history_df = pd.DataFrame()
-            agent_strategy_param_history_df = pd.DataFrame()
-            sql_objects = {}
-            population_df = pd.DataFrame()
-            agent_round_df = pd.DataFrame()
-            trade_execution_df = pd.DataFrame()
-            selected_generation_id = self.generation_id
-
-            if selected_experiment_id is not None:
-                generations_df = con.execute(
-                    """
-                    SELECT
-                        generation_id,
-                        generation_status,
-                        generation_progress,
-                        creation_time,
-                        completion_time,
-                        mean_qty_aggression,
-                        mean_signal_aggression
-                    FROM generations
-                    WHERE experiment_id = ?
-                    ORDER BY generation_id
-                    """,
-                    [selected_experiment_id],
-                ).fetchdf()
-
-                if generations_df.empty:
-                    selected_generation_id = None
-                elif selected_generation_id not in set(generations_df["generation_id"].tolist()):
-                    selected_generation_id = int(generations_df.iloc[-1]["generation_id"])
-
-                wealth_history_df = con.execute(
-                    """
-                    WITH final_round AS (
-                        SELECT
-                            experiment_id,
-                            generation_id,
-                            MAX(round_number) AS final_round_number
-                        FROM agent_round
-                        WHERE experiment_id = ?
-                        GROUP BY experiment_id, generation_id
-                    )
-                    SELECT
-                        ar.generation_id,
-                        ap.strategy_type,
-                        AVG(ar.cash_end + ar.inventory_end * COALESCE(mr.p_t, fs.price, 0)) AS mean_wealth
-                    FROM final_round fr
-                    JOIN agent_round ar
-                      ON fr.experiment_id = ar.experiment_id
-                     AND fr.generation_id = ar.generation_id
-                     AND fr.final_round_number = ar.round_number
-                    JOIN agent_population ap
-                      ON ar.experiment_id = ap.experiment_id
-                     AND ar.generation_id = ap.generation_id
-                     AND ar.agent_id = ap.agent_id
-                    LEFT JOIN market_round mr
-                      ON ar.experiment_id = mr.experiment_id
-                     AND ar.generation_id = mr.generation_id
-                     AND ar.round_number = mr.round_number
-                    LEFT JOIN fundamental_series fs
-                      ON ar.experiment_id = fs.experiment_id
-                     AND ar.generation_id = fs.generation_id
-                     AND ar.round_number = fs.round_number
-                    GROUP BY ar.generation_id, ap.strategy_type
-                    ORDER BY ar.generation_id, ap.strategy_type
-                    """,
-                    [selected_experiment_id],
-                ).fetchdf()
-
-                mean_info_param_df = con.execute(
-                    """
-                    SELECT
-                        generation_id,
-                        strategy_type,
-                        AVG(info_param) AS mean_info_param
-                    FROM agent_population
-                    WHERE experiment_id = ?
-                    GROUP BY generation_id, strategy_type
-                    ORDER BY generation_id, strategy_type
-                    """,
-                    [selected_experiment_id],
-                ).fetchdf()
-
-                strategy_generation_df = con.execute(
-                    """
-                    SELECT
-                        generation_id,
-                        strategy_type,
-                        total_agent_rounds,
-                        avg_profit_loss_per_gen,
-                        avg_fill_rate_per_gen,
-                        avg_aggressiveness_per_gen,
-                        avg_signal_accuracy_per_gen,
-                        avg_inventory_turnover_per_gen,
-                        avg_execution_price_deviation_per_gen,
-                        avg_volume_share_per_gen
-                        ,
-                        avg_trade_size_per_gen,
-                        avg_inventory_risk_per_gen
-                    FROM strategy_performance_per_generation
-                    WHERE experiment_id = ?
-                    ORDER BY generation_id, strategy_type
-                    """,
-                    [selected_experiment_id],
-                ).fetchdf()
-
-                agent_strategy_evolution_df = con.execute(
-                    """
-                    SELECT
-                        generation_id,
-                        strategy_type,
-                        avg_profit_loss_per_gen,
-                        profit_change_from_prev_gen
-                    FROM strategy_evolution_across_generations
-                    WHERE experiment_id = ?
-                    ORDER BY generation_id, strategy_type
-                    """,
-                    [selected_experiment_id],
-                ).fetchdf()
-
-                agent_info_param_history_df = con.execute(
-                    """
-                    SELECT
-                        generation_id,
-                        agent_id,
-                        strategy_type,
-                        info_param
-                    FROM agent_population
-                    WHERE experiment_id = ?
-                      AND strategy_type = 'parameterised_informed'
-                      AND info_param IS NOT NULL
-                    ORDER BY agent_id, generation_id
-                    """,
-                    [selected_experiment_id],
-                ).fetchdf()
-
-                agent_strategy_param_history_df = con.execute(
-                    """
-                    SELECT
-                        generation_id,
-                        agent_id,
-                        strategy_type,
-                        qty_aggression,
-                        signal_aggression
-                    FROM agent_population
-                    WHERE experiment_id = ?
-                      AND strategy_type = 'parameterised_informed'
-                    ORDER BY agent_id, generation_id
-                    """,
-                    [selected_experiment_id],
-                ).fetchdf()
-
-            if selected_experiment_id is not None and selected_generation_id is not None:
-                market_history_df = con.execute(
-                    """
-                    SELECT
-                        mr.round_number,
-                        mr.p_t,
-                        fs.price AS fundamental_price,
-                        mr.best_bid,
-                        mr.best_ask,
-                        mr.volume,
-                        mr.n_trades,
-                        mr.demand_at_p,
-                        mr.supply_at_p,
-                        mr.n_active_buyers,
-                        mr.n_active_sellers,
-                        mr.n_active_total,
-                        mr.bid_depth_total,
-                        mr.ask_depth_total,
-                        mr.price_levels_bid,
-                        mr.price_levels_ask
-                    FROM market_round mr
-                    LEFT JOIN fundamental_series fs
-                      ON mr.experiment_id = fs.experiment_id
-                     AND mr.generation_id = fs.generation_id
-                     AND mr.round_number = fs.round_number
-                    WHERE mr.experiment_id = ? AND mr.generation_id = ?
-                    ORDER BY mr.round_number
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                market_summary_df = con.execute(
-                    """
-                    SELECT
-                        round_number,
-                        max_bid,
-                        max_sell,
-                        min_bid,
-                        min_sell,
-                        bid_price_q2,
-                        ask_price_q3,
-                        fundamental_price,
-                        mid_price
-                    FROM market_round_summary
-                    WHERE experiment_id = ? AND generation_id = ?
-                    ORDER BY round_number
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                strategy_profit_round_df = con.execute(
-                    """
-                    SELECT
-                        round_number,
-                        strategy_type,
-                        avg_wealth,
-                        avg_profit_loss,
-                        avg_fill_rate,
-                        avg_aggressiveness,
-                        avg_signal_accuracy,
-                        avg_inventory_turnover,
-                        avg_execution_price_deviation,
-                        avg_volume_share,
-                        avg_trade_size,
-                        avg_inventory_risk
-                    FROM strategy_performance_per_round
-                    WHERE experiment_id = ? AND generation_id = ?
-                    ORDER BY round_number, strategy_type
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                volume_share_round_df = con.execute(
-                    """
-                    SELECT
-                        ar.round_number,
-                        ap.strategy_type,
-                        AVG(CASE WHEN mr.volume > 0 THEN ar.executed_qty / mr.volume ELSE 0 END) AS avg_volume_share
-                    FROM agent_round ar
-                    JOIN agent_population ap
-                      ON ar.experiment_id = ap.experiment_id
-                     AND ar.generation_id = ap.generation_id
-                     AND ar.agent_id = ap.agent_id
-                    JOIN market_round mr
-                      ON ar.experiment_id = mr.experiment_id
-                     AND ar.generation_id = mr.generation_id
-                     AND ar.round_number = mr.round_number
-                    WHERE ar.experiment_id = ? AND ar.generation_id = ?
-                    GROUP BY ar.round_number, ap.strategy_type
-                    ORDER BY ar.round_number, ap.strategy_type
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                population_df = con.execute(
-                    """
-                    SELECT
-                        agent_id,
-                        strategy_type,
-                        info_param,
-                        qty_aggression,
-                        signal_aggression,
-                        group_label,
-                        initial_cash,
-                        initial_shares
-                    FROM agent_population
-                    WHERE experiment_id = ? AND generation_id = ?
-                    ORDER BY agent_id
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                agent_round_df = con.execute(
-                    """
-                    SELECT
-                        round_number,
-                        agent_id,
-                        action,
-                        signal,
-                        signal_error,
-                        limit_price,
-                        order_qty,
-                        aggressiveness,
-                        executed_qty,
-                        executed_price_avg,
-                        fill_ratio,
-                        cash_end,
-                        inventory_end
-                    FROM agent_round
-                    WHERE experiment_id = ? AND generation_id = ?
-                    ORDER BY round_number, agent_id
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                agent_profit_loss_df = con.execute(
-                    """
-                    SELECT
-                        v.round_number,
-                        v.agent_id,
-                        ap.strategy_type,
-                        v.profit_loss
-                    FROM agent_profit_loss_per_round v
-                    JOIN agent_population ap
-                      ON v.experiment_id = ap.experiment_id
-                     AND v.generation_id = ap.generation_id
-                     AND v.agent_id = ap.agent_id
-                    WHERE v.experiment_id = ? AND v.generation_id = ?
-                    ORDER BY v.agent_id, v.round_number
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                agent_fill_rate_df = con.execute(
-                    """
-                    SELECT
-                        v.round_number,
-                        v.agent_id,
-                        ap.strategy_type,
-                        v.fill_rate
-                    FROM agent_fill_rate_per_round v
-                    JOIN agent_population ap
-                      ON v.experiment_id = ap.experiment_id
-                     AND v.generation_id = ap.generation_id
-                     AND v.agent_id = ap.agent_id
-                    WHERE v.experiment_id = ? AND v.generation_id = ?
-                    ORDER BY v.agent_id, v.round_number
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                agent_inventory_risk_df = con.execute(
-                    """
-                    SELECT
-                        v.round_number,
-                        v.agent_id,
-                        ap.strategy_type,
-                        v.inventory_risk
-                    FROM agent_inventory_risk_per_round v
-                    JOIN agent_population ap
-                      ON v.experiment_id = ap.experiment_id
-                     AND v.generation_id = ap.generation_id
-                     AND v.agent_id = ap.agent_id
-                    WHERE v.experiment_id = ? AND v.generation_id = ?
-                    ORDER BY v.agent_id, v.round_number
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                agent_inventory_turnover_df = con.execute(
-                    """
-                    SELECT
-                        v.round_number,
-                        v.agent_id,
-                        ap.strategy_type,
-                        v.inventory_turnover
-                    FROM agent_inventory_turnover_per_round v
-                    JOIN agent_population ap
-                      ON v.experiment_id = ap.experiment_id
-                     AND v.generation_id = ap.generation_id
-                     AND v.agent_id = ap.agent_id
-                    WHERE v.experiment_id = ? AND v.generation_id = ?
-                    ORDER BY v.agent_id, v.round_number
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                agent_relative_performance_df = con.execute(
-                    """
-                    SELECT
-                        v.round_number,
-                        v.agent_id,
-                        ap.strategy_type,
-                        v.relative_profit_loss
-                    FROM agent_relative_performance_per_round v
-                    JOIN agent_population ap
-                      ON v.experiment_id = ap.experiment_id
-                     AND v.generation_id = ap.generation_id
-                     AND v.agent_id = ap.agent_id
-                    WHERE v.experiment_id = ? AND v.generation_id = ?
-                    ORDER BY v.agent_id, v.round_number
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                agent_signal_accuracy_df = con.execute(
-                    """
-                    SELECT
-                        v.round_number,
-                        v.agent_id,
-                        ap.strategy_type,
-                        v.signal_accuracy
-                    FROM agent_signal_accuracy_per_round v
-                    JOIN agent_population ap
-                      ON v.experiment_id = ap.experiment_id
-                     AND v.generation_id = ap.generation_id
-                     AND v.agent_id = ap.agent_id
-                    WHERE v.experiment_id = ? AND v.generation_id = ?
-                    ORDER BY v.agent_id, v.round_number
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                agent_volume_share_df = con.execute(
-                    """
-                    SELECT
-                        v.round_number,
-                        v.agent_id,
-                        ap.strategy_type,
-                        v.volume_share
-                    FROM agent_volume_share_per_round v
-                    JOIN agent_population ap
-                      ON v.experiment_id = ap.experiment_id
-                     AND v.generation_id = ap.generation_id
-                     AND v.agent_id = ap.agent_id
-                    WHERE v.experiment_id = ? AND v.generation_id = ?
-                    ORDER BY v.agent_id, v.round_number
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                agent_aggressiveness_spread_df = con.execute(
-                    """
-                    SELECT
-                        v.round_number,
-                        v.agent_id,
-                        ap.strategy_type,
-                        v.aggressiveness,
-                        v.market_spread
-                    FROM agent_aggressiveness_vs_spread v
-                    JOIN agent_population ap
-                      ON v.experiment_id = ap.experiment_id
-                     AND v.generation_id = ap.generation_id
-                     AND v.agent_id = ap.agent_id
-                    WHERE v.experiment_id = ? AND v.generation_id = ?
-                    ORDER BY v.agent_id, v.round_number
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                agent_order_count_df = con.execute(
-                    """
-                    SELECT
-                        v.round_number,
-                        v.agent_id,
-                        ap.strategy_type,
-                        SUM(v.order_count) AS order_count
-                    FROM agent_order_type_distribution_per_round v
-                    JOIN agent_population ap
-                      ON v.experiment_id = ap.experiment_id
-                     AND v.generation_id = ap.generation_id
-                     AND v.agent_id = ap.agent_id
-                    WHERE v.experiment_id = ? AND v.generation_id = ?
-                    GROUP BY v.round_number, v.agent_id, ap.strategy_type
-                    ORDER BY v.agent_id, v.round_number
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                agent_behavior_change_df = con.execute(
-                    """
-                    SELECT
-                        v.round_number,
-                        v.agent_id,
-                        ap.strategy_type,
-                        v.aggressiveness_change,
-                        v.order_qty_change,
-                        v.inventory_change
-                    FROM agent_behavior_change_per_round v
-                    JOIN agent_population ap
-                      ON v.experiment_id = ap.experiment_id
-                     AND v.generation_id = ap.generation_id
-                     AND v.agent_id = ap.agent_id
-                    WHERE v.experiment_id = ? AND v.generation_id = ?
-                    ORDER BY v.agent_id, v.round_number
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                agent_execution_price_deviation_df = con.execute(
-                    """
-                    SELECT
-                        v.round_number,
-                        v.agent_id,
-                        ap.strategy_type,
-                        v.execution_price_deviation
-                    FROM agent_execution_price_deviation_per_round v
-                    JOIN agent_population ap
-                      ON v.experiment_id = ap.experiment_id
-                     AND v.generation_id = ap.generation_id
-                     AND v.agent_id = ap.agent_id
-                    WHERE v.experiment_id = ? AND v.generation_id = ?
-                    ORDER BY v.agent_id, v.round_number
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                agent_avg_trade_size_df = con.execute(
-                    """
-                    SELECT
-                        v.round_number,
-                        v.agent_id,
-                        ap.strategy_type,
-                        v.avg_trade_size
-                    FROM agent_avg_trade_size_per_round v
-                    JOIN agent_population ap
-                      ON v.experiment_id = ap.experiment_id
-                     AND v.generation_id = ap.generation_id
-                     AND v.agent_id = ap.agent_id
-                    WHERE v.experiment_id = ? AND v.generation_id = ?
-                    ORDER BY v.agent_id, v.round_number
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-                trade_execution_df = con.execute(
-                    """
-                    SELECT
-                        round_number,
-                        trade_id,
-                        buyer_agent_id,
-                        seller_agent_id,
-                        price,
-                        quantity,
-                        notional
-                    FROM trade_execution
-                    WHERE experiment_id = ? AND generation_id = ?
-                    ORDER BY round_number, trade_id
-                    """,
-                    [selected_experiment_id, selected_generation_id],
-                ).fetchdf()
-
-            object_rows = con.execute(
-                """
-                SELECT
-                    table_name,
-                    table_type
-                FROM information_schema.tables
-                WHERE table_schema = 'main'
-                ORDER BY
-                    CASE WHEN table_type = 'BASE TABLE' THEN 0 ELSE 1 END,
-                    table_name
-                """
-            ).fetchall()
-
-            for object_name, object_type in object_rows:
-                try:
-                    column_rows = con.execute(
-                        """
-                        SELECT column_name
-                        FROM information_schema.columns
-                        WHERE table_schema = 'main' AND table_name = ?
-                        ORDER BY ordinal_position
-                        """,
-                        [object_name],
-                    ).fetchall()
-                    column_names = {str(row[0]) for row in column_rows}
-                    where_clauses = []
-                    query_params = []
-                    if selected_experiment_id is not None and "experiment_id" in column_names:
-                        where_clauses.append("experiment_id = ?")
-                        query_params.append(selected_experiment_id)
-                    if selected_generation_id is not None and "generation_id" in column_names:
-                        where_clauses.append("generation_id = ?")
-                        query_params.append(selected_generation_id)
-
-                    base_query = f'SELECT * FROM "{object_name}"'
-                    if where_clauses:
-                        base_query += " WHERE " + " AND ".join(where_clauses)
-
-                    total_rows = int(
-                        con.execute(
-                            f"SELECT COUNT(*) FROM ({base_query}) AS filtered_object",
-                            query_params,
-                        ).fetchone()[0]
-                    )
-                    sql_objects[str(object_name)] = {
-                        "display_name": _humanize_sql_object_name(str(object_name)),
-                        "type": str(object_type),
-                        "row_count": total_rows,
-                        "preview_rows": min(total_rows, SQL_TAB_PREVIEW_ROWS),
-                        "data": con.execute(
-                            f"{base_query} LIMIT {SQL_TAB_PREVIEW_ROWS}",
-                            query_params,
-                        ).fetchdf(),
-                    }
-                except Exception as exc:
-                    sql_objects[str(object_name)] = {
-                        "display_name": _humanize_sql_object_name(str(object_name)),
-                        "type": str(object_type),
-                        "row_count": 0,
-                        "preview_rows": 0,
-                        "data": pd.DataFrame({"error": [str(exc)]}),
-                    }
-
-            return {
-                "database_created": database_created,
-                "experiments": experiments_df,
-                "generations": generations_df,
-                "wealth_history": wealth_history_df,
-                "mean_info_param": mean_info_param_df,
-                "strategy_generation": strategy_generation_df,
-                "market_history": market_history_df,
-                "market_summary": market_summary_df,
-                "strategy_profit_round": strategy_profit_round_df,
-                "volume_share_round": volume_share_round_df,
-                "agent_strategy_evolution": agent_strategy_evolution_df,
-                "agent_profit_loss": agent_profit_loss_df,
-                "agent_fill_rate": agent_fill_rate_df,
-                "agent_inventory_risk": agent_inventory_risk_df,
-                "agent_inventory_turnover": agent_inventory_turnover_df,
-                "agent_relative_performance": agent_relative_performance_df,
-                "agent_signal_accuracy": agent_signal_accuracy_df,
-                "agent_volume_share": agent_volume_share_df,
-                "agent_aggressiveness_spread": agent_aggressiveness_spread_df,
-                "agent_order_count": agent_order_count_df,
-                "agent_behavior_change": agent_behavior_change_df,
-                "agent_execution_price_deviation": agent_execution_price_deviation_df,
-                "agent_avg_trade_size": agent_avg_trade_size_df,
-                "agent_info_param_history": agent_info_param_history_df,
-                "agent_strategy_param_history": agent_strategy_param_history_df,
-                "sql_objects": sql_objects,
-                "population": population_df,
-                "agent_round": agent_round_df,
-                "trade_execution": trade_execution_df,
-                "selected_experiment_id": selected_experiment_id,
-                "selected_generation_id": selected_generation_id,
-            }
-        finally:
-            con.close()
+        return load_database_payload(
+            self.db_path,
+            experiment_id=self.experiment_id,
+            generation_id=self.generation_id,
+        )
 
 
 class ExperimentRunnerWorker(QThread):
@@ -1266,7 +610,7 @@ class ExperimentRunnerWorker(QThread):
 
     def run(self):
         try:
-            result = run_experiment(
+            result = _run_experiment(
                 config_overrides=self.config_overrides,
                 progress_callback=self.progress.emit,
                 run_analysis=True,
@@ -1294,256 +638,11 @@ class ComparisonLoaderWorker(QThread):
             self.error.emit(str(exc))
 
     def _load_payload(self):
-        db_file = Path(self.db_path)
-        _ensure_database_exists(str(db_file))
-        if not self.experiment_ids:
-            return {
-                "experiments": pd.DataFrame(),
-                "comparison_metrics": pd.DataFrame(),
-                "sql_objects": {},
-            }
-
-        con = duckdb.connect(str(db_file))
-        try:
-            experiment_ids_sql = ", ".join(f"'{experiment_id}'" for experiment_id in self.experiment_ids)
-
-            experiments_df = con.execute(
-                f"""
-                SELECT
-                    experiment_id,
-                    experiment_name,
-                    experiment_type,
-                    creation_time,
-                    n_generations,
-                    n_rounds,
-                    n_agents
-                FROM experiments
-                WHERE experiment_id IN ({experiment_ids_sql})
-                ORDER BY creation_time DESC
-                """
-            ).fetchdf()
-
-            if experiments_df.empty:
-                return {
-                    "experiments": experiments_df,
-                    "comparison_metrics": pd.DataFrame(),
-                    "sql_objects": {},
-                }
-
-            generations_df = con.execute(
-                f"""
-                SELECT
-                    experiment_id,
-                    generation_id,
-                    mean_qty_aggression,
-                    mean_signal_aggression
-                FROM generations
-                WHERE experiment_id IN ({experiment_ids_sql})
-                ORDER BY experiment_id, generation_id
-                """
-            ).fetchdf()
-
-            wealth_history_df = con.execute(
-                f"""
-                WITH final_round AS (
-                    SELECT
-                        experiment_id,
-                        generation_id,
-                        MAX(round_number) AS final_round_number
-                    FROM agent_round
-                    WHERE experiment_id IN ({experiment_ids_sql})
-                    GROUP BY experiment_id, generation_id
-                )
-                SELECT
-                    ar.experiment_id,
-                    ar.generation_id,
-                    ap.strategy_type,
-                    AVG(ar.cash_end + ar.inventory_end * COALESCE(mr.p_t, fs.price, 0)) AS mean_wealth
-                FROM final_round fr
-                JOIN agent_round ar
-                  ON fr.experiment_id = ar.experiment_id
-                 AND fr.generation_id = ar.generation_id
-                 AND fr.final_round_number = ar.round_number
-                JOIN agent_population ap
-                  ON ar.experiment_id = ap.experiment_id
-                 AND ar.generation_id = ap.generation_id
-                 AND ar.agent_id = ap.agent_id
-                LEFT JOIN market_round mr
-                  ON ar.experiment_id = mr.experiment_id
-                 AND ar.generation_id = mr.generation_id
-                 AND ar.round_number = mr.round_number
-                LEFT JOIN fundamental_series fs
-                  ON ar.experiment_id = fs.experiment_id
-                 AND ar.generation_id = fs.generation_id
-                 AND ar.round_number = fs.round_number
-                GROUP BY ar.experiment_id, ar.generation_id, ap.strategy_type
-                ORDER BY ar.experiment_id, ar.generation_id, ap.strategy_type
-                """
-            ).fetchdf()
-
-            mean_info_param_df = con.execute(
-                f"""
-                SELECT
-                    experiment_id,
-                    generation_id,
-                    strategy_type,
-                    AVG(info_param) AS mean_info_param
-                FROM agent_population
-                WHERE experiment_id IN ({experiment_ids_sql})
-                GROUP BY experiment_id, generation_id, strategy_type
-                ORDER BY experiment_id, generation_id, strategy_type
-                """
-            ).fetchdf()
-
-            diversity_df = con.execute(
-                f"""
-                SELECT
-                    experiment_id,
-                    generation_id,
-                    STDDEV_SAMP(qty_aggression) AS std_qty_aggression,
-                    STDDEV_SAMP(signal_aggression) AS std_signal_aggression,
-                    STDDEV_SAMP(CASE
-                        WHEN strategy_type = 'parameterised_informed' THEN info_param
-                        ELSE NULL
-                    END) AS std_info_param_parameterised_informed
-                FROM agent_population
-                WHERE experiment_id IN ({experiment_ids_sql})
-                GROUP BY experiment_id, generation_id
-                ORDER BY experiment_id, generation_id
-                """
-            ).fetchdf()
-
-            comparison_df = generations_df.copy()
-            if not wealth_history_df.empty:
-                wealth_pivot = (
-                    wealth_history_df.pivot(
-                        index=["experiment_id", "generation_id"],
-                        columns="strategy_type",
-                        values="mean_wealth",
-                    )
-                    .reset_index()
-                    .rename(
-                        columns={
-                            "parameterised_informed": "mean_wealth_parameterised_informed",
-                            "zi": "mean_wealth_zi",
-                        }
-                    )
-                )
-                comparison_df = comparison_df.merge(
-                    wealth_pivot,
-                    on=["experiment_id", "generation_id"],
-                    how="left",
-                )
-
-            if not mean_info_param_df.empty:
-                info_pivot = (
-                    mean_info_param_df.pivot(
-                        index=["experiment_id", "generation_id"],
-                        columns="strategy_type",
-                        values="mean_info_param",
-                    )
-                    .reset_index()
-                    .rename(
-                        columns={
-                            "parameterised_informed": "mean_info_param_parameterised_informed",
-                            "zi": "mean_info_param_zi",
-                        }
-                    )
-                )
-                comparison_df = comparison_df.merge(
-                    info_pivot,
-                    on=["experiment_id", "generation_id"],
-                    how="left",
-                )
-
-            if not diversity_df.empty:
-                comparison_df = comparison_df.merge(
-                    diversity_df,
-                    on=["experiment_id", "generation_id"],
-                    how="left",
-                )
-
-            if not comparison_df.empty:
-                comparison_df = comparison_df.sort_values(
-                    ["experiment_id", "generation_id"]
-                ).reset_index(drop=True)
-
-            sql_objects = {}
-            object_rows = con.execute(
-                """
-                SELECT
-                    table_name,
-                    table_type
-                FROM information_schema.tables
-                WHERE table_schema = 'main'
-                ORDER BY
-                    CASE WHEN table_type = 'BASE TABLE' THEN 0 ELSE 1 END,
-                    table_name
-                """
-            ).fetchall()
-
-            for object_name, object_type in object_rows:
-                try:
-                    column_rows = con.execute(
-                        """
-                        SELECT column_name
-                        FROM information_schema.columns
-                        WHERE table_schema = 'main' AND table_name = ?
-                        ORDER BY ordinal_position
-                        """,
-                        [object_name],
-                    ).fetchall()
-                    ordered_column_names = [str(row[0]) for row in column_rows]
-                    column_name_set = set(ordered_column_names)
-                    where_clauses = []
-                    if "experiment_id" in column_name_set:
-                        where_clauses.append(f"experiment_id IN ({experiment_ids_sql})")
-
-                    base_query = f'SELECT * FROM "{object_name}"'
-                    if where_clauses:
-                        base_query += " WHERE " + " AND ".join(where_clauses)
-                    order_columns = [
-                        column_name
-                        for column_name in ["experiment_id", "generation_id", "round_number", "agent_id", "trade_id"]
-                        if column_name in column_name_set
-                    ]
-                    if order_columns:
-                        base_query += " ORDER BY " + ", ".join(order_columns)
-
-                    total_rows = int(
-                        con.execute(
-                            f"SELECT COUNT(*) FROM ({base_query}) AS filtered_object"
-                        ).fetchone()[0]
-                    )
-                    sql_objects[str(object_name)] = {
-                        "display_name": _humanize_sql_object_name(str(object_name)),
-                        "type": str(object_type),
-                        "row_count": total_rows,
-                        "preview_rows": min(total_rows, SQL_TAB_PREVIEW_ROWS),
-                        "data": con.execute(
-                            f"{base_query} LIMIT {SQL_TAB_PREVIEW_ROWS}"
-                        ).fetchdf(),
-                    }
-                except Exception as exc:
-                    sql_objects[str(object_name)] = {
-                        "display_name": _humanize_sql_object_name(str(object_name)),
-                        "type": str(object_type),
-                        "row_count": 0,
-                        "preview_rows": 0,
-                        "data": pd.DataFrame({"error": [str(exc)]}),
-                    }
-
-            return {
-                "experiments": experiments_df,
-                "comparison_metrics": comparison_df,
-                "sql_objects": sql_objects,
-            }
-        finally:
-            con.close()
+        return load_comparison_payload(self.db_path, self.experiment_ids)
 
 
 class SweepComparisonWorker(QThread):
-    """Background thread that runs persisted sweep experiments and streams live comparison updates."""
+    """Background thread that runs sweep experiments in parallel worker processes."""
 
     progress = Signal(dict)
     completed = Signal(dict)
@@ -1555,26 +654,38 @@ class SweepComparisonWorker(QThread):
         self.settings = dict(settings)
 
     def run(self):
+        temp_db_paths = []
         try:
             sweep_title, run_args = _build_sweep_run_args(self.sweep_name, self.settings)
             total_runs = len(run_args)
+            requested_workers = int(self.settings.get("max_parallel_workers", os.cpu_count() or 1))
+            max_workers = max(1, min(total_runs, requested_workers, os.cpu_count() or 1))
             self.progress.emit(
                 {
                     "event": "sweep_started",
                     "sweep_name": self.sweep_name,
                     "sweep_title": sweep_title,
                     "total_runs": total_runs,
+                    "worker_count": max_workers,
                 }
             )
-            indexed_results = []
+            indexed_results = [None] * total_runs
+            completed_runs = 0
+            target_db_path = str(self.settings["db_path"])
+            process_args = []
+            temp_db_by_run = {}
+            experiment_id_by_run = {}
+            last_live_generation_by_run = {}
             for run_index, (label, overrides) in enumerate(run_args, start=1):
-                run_overrides = dict(overrides)
-                run_overrides["db_path"] = str(self.settings["db_path"])
-                run_overrides["experiment_name"] = label
-                run_overrides["experiment_type"] = f"Sweep: {self.sweep_name}"
-                run_overrides["run_notes"] = sweep_title
-
-                live_generation_df = pd.DataFrame()
+                tmp_db = make_temp_duckdb_path(f"abm_{self.sweep_name}")
+                temp_db_paths.append(tmp_db)
+                temp_db_by_run[run_index] = tmp_db
+                experiment_id_by_run[run_index] = None
+                last_live_generation_by_run[run_index] = 0
+                process_args.append(
+                    (run_index, self.sweep_name, sweep_title, self.settings, label, overrides, tmp_db)
+                )
+            for run_index, (_, _) in enumerate(run_args, start=1):
                 self.progress.emit(
                     {
                         "event": "sweep_run_started",
@@ -1582,61 +693,86 @@ class SweepComparisonWorker(QThread):
                         "sweep_title": sweep_title,
                         "run_index": run_index,
                         "total_runs": total_runs,
-                        "run_label": label,
+                        "run_label": run_args[run_index - 1][0],
                     }
                 )
-
-                def sweep_progress_callback(payload):
-                    nonlocal live_generation_df
-                    payload = dict(payload)
-                    payload["sweep_name"] = self.sweep_name
-                    payload["sweep_title"] = sweep_title
-                    payload["run_index"] = run_index
-                    payload["total_runs"] = total_runs
-                    payload["run_label"] = label
-                    if payload.get("event") == "generation_completed":
-                        metrics = payload.get("generation_metrics", {})
-                        if metrics:
-                            live_generation_df = pd.concat(
-                                [live_generation_df, pd.DataFrame([metrics])],
-                                ignore_index=True,
-                            )
-                            live_generation_df = live_generation_df.drop_duplicates(
-                                subset=["generation_id"],
-                                keep="last",
-                            )
-                            payload["live_generation_df"] = _prepare_sweep_plot_dataframe(
-                                live_generation_df
-                            )
-                    self.progress.emit(payload)
-
-                result = run_experiment(
-                    config_overrides=run_overrides,
-                    progress_callback=sweep_progress_callback,
-                    run_analysis=False,
-                )
-                run_df = _prepare_sweep_plot_dataframe(
-                    result["generation_counts_df"].reset_index(drop=True).copy()
-                )
-                indexed_results.append(
-                    {
-                        "label": label,
-                        "experiment_id": result.get("experiment_id"),
-                        "data": run_df,
-                    }
-                )
-                self.progress.emit(
-                    {
-                        "event": "sweep_run_completed",
-                        "sweep_name": self.sweep_name,
-                        "run_label": label,
-                        "run_index": run_index,
-                        "completed_runs": run_index,
-                        "total_runs": total_runs,
-                        "experiment_id": result.get("experiment_id"),
-                        "data": run_df.copy(),
-                    }
-                )
+            with ProcessPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {executor.submit(run_single_sweep_process, args): args[0] for args in process_args}
+                pending = set(future_map.keys())
+                while pending:
+                    done, pending = wait(pending, timeout=0.75, return_when=FIRST_COMPLETED)
+                    for run_index, temp_db_path in temp_db_by_run.items():
+                        if indexed_results[run_index - 1] is not None:
+                            continue
+                        experiment_id, live_generation = peek_partial_sweep_progress(
+                            temp_db_path,
+                            experiment_id=experiment_id_by_run.get(run_index),
+                        )
+                        if experiment_id is not None:
+                            experiment_id_by_run[run_index] = experiment_id
+                        if live_generation <= last_live_generation_by_run[run_index]:
+                            continue
+                        experiment_id, partial_df = load_partial_sweep_run(
+                            temp_db_path,
+                            experiment_id=experiment_id_by_run.get(run_index),
+                        )
+                        if experiment_id is not None:
+                            experiment_id_by_run[run_index] = experiment_id
+                        if partial_df.empty or "generation" not in partial_df.columns:
+                            continue
+                        last_live_generation_by_run[run_index] = live_generation
+                        self.progress.emit(
+                            {
+                                "event": "generation_completed",
+                                "sweep_name": self.sweep_name,
+                                "sweep_title": sweep_title,
+                                "run_index": run_index,
+                                "total_runs": total_runs,
+                                "run_label": run_args[run_index - 1][0],
+                                "generation_id": live_generation,
+                                "n_generations": int(self.settings["n_generations"]),
+                                "experiment_id": experiment_id,
+                                "live_generation_df": partial_df.copy(),
+                            }
+                        )
+                    for future in done:
+                        run_index, result_payload = future.result()
+                        indexed_results[run_index - 1] = result_payload
+                        completed_runs += 1
+                        self.progress.emit(
+                            {
+                                "event": "sweep_run_completed",
+                                "sweep_name": self.sweep_name,
+                                "run_label": result_payload["label"],
+                                "run_index": run_index,
+                                "completed_runs": completed_runs,
+                                "total_runs": total_runs,
+                                "experiment_id": result_payload.get("experiment_id"),
+                                "data": result_payload["data"],
+                            }
+                        )
+            merge_experiments_from_temp_dbs(
+                [
+                    (result["temp_db_path"], result["experiment_id"])
+                    for result in indexed_results
+                    if result is not None
+                ],
+                target_db_path,
+            )
+            for result in indexed_results:
+                if result is None:
+                    continue
+                temp_db_path = result.get("temp_db_path")
+                if not temp_db_path:
+                    continue
+                try:
+                    os.unlink(temp_db_path)
+                except OSError:
+                    pass
+                try:
+                    os.unlink(f"{temp_db_path}.wal")
+                except OSError:
+                    pass
 
             self.completed.emit(
                 {
@@ -1648,6 +784,16 @@ class SweepComparisonWorker(QThread):
             )
         except Exception as exc:
             self.error.emit(str(exc))
+        finally:
+            for temp_db_path in temp_db_paths:
+                try:
+                    os.unlink(temp_db_path)
+                except OSError:
+                    pass
+                try:
+                    os.unlink(f"{temp_db_path}.wal")
+                except OSError:
+                    pass
 
 
 class CommandCenter(QMainWindow):
@@ -1662,6 +808,9 @@ class CommandCenter(QMainWindow):
         self._theme = APP_THEMES[self._theme_mode]
         self._current_experiment_id = None
         self._current_generation_id = None
+        self._current_round_number = None
+        self._current_run_total_generations = None
+        self._current_run_total_rounds = None
         self._microstructure_round = None
         self._suppress_selection_signals = False
         self.worker = None
@@ -1671,7 +820,14 @@ class CommandCenter(QMainWindow):
         self.live_generations_df = pd.DataFrame()
         self.live_strategy_generation_df = pd.DataFrame()
         self.live_strategy_round_df = pd.DataFrame()
+        self.live_strategy_profit_round_df = pd.DataFrame()
+        self.live_population_history_df = pd.DataFrame()
+        self.live_agent_round_df = pd.DataFrame()
+        self.live_market_history_df = pd.DataFrame()
+        self.live_market_summary_df = pd.DataFrame()
+        self.live_trade_execution_df = pd.DataFrame()
         self._pending_generation_id = None
+        self._live_payload = None
         self._last_payload = None
         self._comparison_payload = None
         self._comparison_sweep_payload = None
@@ -1683,6 +839,8 @@ class CommandCenter(QMainWindow):
         self._plot_theme_specs = {}
         self._plot_canvases = []
         self._comparison_zero_lines = {}
+        self._pending_sql_objects = {}
+        self._dirty_tabs = set()
         self._generation_slider_timer = QTimer(self)
         self._generation_slider_timer.setSingleShot(True)
         self._generation_slider_timer.setInterval(1000)
@@ -1744,6 +902,7 @@ class CommandCenter(QMainWindow):
         self.checkbox_show_parameterised.toggled.connect(self._refresh_plots_only)
         self.checkbox_show_zi.toggled.connect(self._refresh_plots_only)
         self.checkbox_dark_mode.toggled.connect(self._on_theme_toggled)
+        self.tabs.currentChanged.connect(self._on_main_tab_changed)
 
         self._apply_theme()
         self.refresh_data()
@@ -1781,11 +940,11 @@ class CommandCenter(QMainWindow):
         theme = self._theme
         return f"""
         QWidget {{
-            background-color: {theme["window_bg"]};
+            background-color: {theme["window_background"]};
             color: {theme["text"]};
         }}
         QMainWindow, QScrollArea, QScrollArea > QWidget > QWidget, QTabWidget::pane {{
-            background-color: {theme["window_bg"]};
+            background-color: {theme["window_background"]};
         }}
         QGroupBox {{
             background-color: {theme["surface_bg"]};
@@ -1942,6 +1101,123 @@ class CommandCenter(QMainWindow):
         self._theme_mode = "dark" if checked else "light"
         self._apply_theme()
 
+    def _clear_sweep_progress_stream(self):
+        if hasattr(self, "sweep_progress_stream"):
+            self.sweep_progress_stream.clear()
+
+    def _append_sweep_progress_line(self, message: str):
+        if hasattr(self, "sweep_progress_stream"):
+            self.sweep_progress_stream.appendPlainText(str(message))
+            scrollbar = self.sweep_progress_stream.verticalScrollBar()
+            if scrollbar is not None:
+                scrollbar.setValue(scrollbar.maximum())
+
+    def _current_data_payload(self):
+        if self.run_worker is not None and self._live_payload is not None:
+            return self._live_payload
+        return self._last_payload
+
+    def _current_tab_key(self):
+        current_widget = self.tabs.currentWidget()
+        if current_widget is self.dashboard_tab:
+            return "dashboard"
+        if current_widget is self.strategy_performance_tab:
+            return "strategy"
+        if current_widget is self.agent_performance_tab:
+            return "agent"
+        if current_widget is self.microstructure_tab:
+            return "microstructure"
+        if current_widget is self.comparison_tab:
+            return "comparison"
+        if current_widget is self.sql_tab:
+            return "sql"
+        return None
+
+    def _mark_tabs_dirty(self, *tab_keys):
+        self._dirty_tabs.update(tab_keys)
+
+    def _refresh_active_tab(self, force=False):
+        tab_key = self._current_tab_key()
+        if tab_key is None:
+            return
+        if not force and tab_key not in self._dirty_tabs:
+            return
+        payload = self._current_data_payload()
+        self._update_all_plot_titles()
+        if tab_key == "dashboard" and payload is not None:
+            self._update_parameter_plot(payload["generations"])
+            self._update_wealth_plot(payload["wealth_history"])
+            self._update_mean_info_param_plot(payload["mean_info_param"])
+            self._update_market_plot(payload["market_summary"])
+            self._update_profit_plot(payload["strategy_profit_round"])
+            self._update_volume_share_plot(payload["volume_share_round"])
+        elif tab_key == "strategy" and payload is not None:
+            self._update_metric_grid(
+                self._build_strategy_generation_plot_df(
+                    payload["strategy_generation"],
+                    payload["wealth_history"],
+                ),
+                index_col="generation_id",
+                curve_store=self.performance_generation_curves,
+            )
+            self._update_metric_grid(
+                payload["strategy_profit_round"],
+                index_col="round_number",
+                curve_store=self.performance_round_curves,
+            )
+        elif tab_key == "agent" and payload is not None:
+            self._update_metric_grid(
+                payload["agent_strategy_evolution"],
+                index_col="generation_id",
+                curve_store=self.agent_generation_curves,
+            )
+            self._update_agent_info_param_plot(payload["agent_info_param_history"])
+            self._update_agent_generation_param_plot(
+                payload["agent_strategy_param_history"],
+                "qty_aggression",
+                self.agent_qty_aggression_plot,
+            )
+            self._update_agent_generation_param_plot(
+                payload["agent_strategy_param_history"],
+                "signal_aggression",
+                self.agent_signal_aggression_plot,
+            )
+            self._update_agent_metric_plot(payload["agent_profit_loss"], "profit_loss")
+            self._update_agent_metric_plot(payload["agent_fill_rate"], "fill_rate")
+            self._update_agent_metric_plot(payload["agent_inventory_risk"], "inventory_risk")
+            self._update_agent_metric_plot(payload["agent_inventory_turnover"], "inventory_turnover")
+            self._update_agent_metric_plot(payload["agent_relative_performance"], "relative_profit_loss")
+            self._update_agent_metric_plot(payload["agent_signal_accuracy"], "signal_accuracy")
+            self._update_agent_metric_plot(payload["agent_volume_share"], "volume_share")
+            self._update_agent_metric_plot(payload["agent_avg_trade_size"], "avg_trade_size")
+            self._update_agent_metric_plot(payload["agent_aggressiveness_spread"], "aggressiveness")
+            self._update_agent_metric_plot(payload["agent_aggressiveness_spread"], "market_spread")
+            self._update_agent_metric_plot(payload["agent_behavior_change"], "aggressiveness_change")
+            self._update_agent_metric_plot(payload["agent_behavior_change"], "order_qty_change")
+            self._update_agent_metric_plot(payload["agent_behavior_change"], "inventory_change")
+            self._update_agent_metric_plot(
+                payload["agent_execution_price_deviation"],
+                "execution_price_deviation",
+            )
+        elif tab_key == "microstructure" and payload is not None:
+            self._update_microstructure_tab(payload)
+        elif tab_key == "comparison":
+            if self._comparison_payload is not None:
+                self._update_comparison_plots(
+                    self._comparison_payload.get("comparison_metrics", pd.DataFrame()),
+                    self._comparison_payload.get("experiments", pd.DataFrame()),
+                )
+            if self._comparison_sweep_payload is not None:
+                self._update_sweep_comparison_plots(
+                    self._comparison_sweep_payload.get("runs", []),
+                )
+        elif tab_key == "sql" and self._pending_sql_objects:
+            self._populate_sql_tab(self._pending_sql_objects)
+        self._dirty_tabs.discard(tab_key)
+
+    def _on_main_tab_changed(self, _index):
+        self._refresh_active_tab(force=True)
+
     def _build_left_panel(self, left_layout):
         data_group = QGroupBox("Database Controls")
         data_form = QFormLayout()
@@ -1992,8 +1268,19 @@ class CommandCenter(QMainWindow):
         self.summary_label.setWordWrap(True)
         self.status_label = QLabel("Ready")
         self.status_label.setWordWrap(True)
+        self.live_progress_label = QLabel(
+            "\n".join(
+                [
+                    "Live run progress:",
+                    "Generation: -",
+                    "Round: -",
+                ]
+            )
+        )
+        self.live_progress_label.setWordWrap(True)
         info_layout.addWidget(self.summary_label)
         info_layout.addWidget(self.status_label)
+        info_layout.addWidget(self.live_progress_label)
         info_group.setLayout(info_layout)
         left_layout.addWidget(info_group)
 
@@ -2073,6 +1360,7 @@ class CommandCenter(QMainWindow):
         self.sweep_total_agents_input = QLineEdit()
         self.sweep_generations_input = QLineEdit()
         self.sweep_rounds_input = QLineEdit()
+        self.sweep_max_workers_input = QLineEdit()
         self.sweep_fixed_drift_input = QLineEdit()
         self.sweep_fixed_volatility_input = QLineEdit()
         self.sweep_population_values_input = QLineEdit()
@@ -2082,6 +1370,7 @@ class CommandCenter(QMainWindow):
         sweep_form.addRow("Total Agents:", self.sweep_total_agents_input)
         sweep_form.addRow("Generations:", self.sweep_generations_input)
         sweep_form.addRow("Rounds:", self.sweep_rounds_input)
+        sweep_form.addRow("Max Parallel Workers:", self.sweep_max_workers_input)
         sweep_form.addRow("Fixed Drift:", self.sweep_fixed_drift_input)
         sweep_form.addRow("Fixed Volatility:", self.sweep_fixed_volatility_input)
         sweep_form.addRow("Population Pairs:", self.sweep_population_values_input)
@@ -2094,6 +1383,11 @@ class CommandCenter(QMainWindow):
         self.btn_clear_sweep_comparison.clicked.connect(self.clear_sweep_comparison)
         self.sweep_status_label = QLabel("Select a sweep and click Run Sweep Comparison.")
         self.sweep_status_label.setWordWrap(True)
+        self.sweep_progress_stream = QPlainTextEdit()
+        self.sweep_progress_stream.setReadOnly(True)
+        self.sweep_progress_stream.setPlaceholderText("Sweep progress stream will appear here.")
+        self.sweep_progress_stream.setMaximumHeight(180)
+        self.sweep_progress_stream.document().setMaximumBlockCount(300)
         comparison_layout.addWidget(comparison_help)
         comparison_layout.addWidget(self.comparison_experiment_list)
         comparison_layout.addWidget(self.btn_compare_runs)
@@ -2104,6 +1398,7 @@ class CommandCenter(QMainWindow):
         comparison_layout.addWidget(self.btn_run_sweep_comparison)
         comparison_layout.addWidget(self.btn_clear_sweep_comparison)
         comparison_layout.addWidget(self.sweep_status_label)
+        comparison_layout.addWidget(self.sweep_progress_stream)
         comparison_group.setLayout(comparison_layout)
         left_layout.addWidget(comparison_group)
         self._apply_sweep_defaults(self.combo_sweep_type.currentText())
@@ -2190,7 +1485,6 @@ class CommandCenter(QMainWindow):
             bottom_text="Generation",
             bottom_legend=[
                 ("Parameterised Informed", (30, 144, 255)),
-                ("ZI", (205, 92, 92)),
             ],
             left_text="Mean Info_Param",
             title_text=self.plot_info_param_title,
@@ -2533,7 +1827,8 @@ class CommandCenter(QMainWindow):
                     "Candlestick View",
                     "Trade Network",
                     "Order Imbalance and Spread",
-                    "Participation and Volume",
+                    "Participation",
+                    "Volume",
                 ]
             )
         )
@@ -2543,7 +1838,8 @@ class CommandCenter(QMainWindow):
         self.micro_candle_title = "Candlestick View"
         self.micro_network_title = "Trade Network"
         self.micro_pressure_title = "Order Imbalance and Spread"
-        self.micro_activity_title = "Participation and Volume"
+        self.micro_participation_title = "Participation"
+        self.micro_volume_title = "Volume"
 
         self.micro_lob_plot = self.microstructure_area.addPlot(
             title=self._format_plot_title(self.micro_lob_title)
@@ -2552,6 +1848,10 @@ class CommandCenter(QMainWindow):
         self._register_plot_theme(
             self.micro_lob_plot,
             bottom_text="Limit Price",
+            bottom_legend=[
+                ("Buy Queue", (30, 144, 255)),
+                ("Sell Queue", (220, 20, 60)),
+            ],
             left_text="Order Qty",
             title_text=self.micro_lob_title,
         )
@@ -2563,6 +1863,10 @@ class CommandCenter(QMainWindow):
         self._register_plot_theme(
             self.micro_candle_plot,
             bottom_text="Round",
+            bottom_legend=[
+                ("Up Candle", (46, 139, 87)),
+                ("Down Candle", (220, 20, 60)),
+            ],
             left_text="Price",
             title_text=self.micro_candle_title,
         )
@@ -2589,24 +1893,49 @@ class CommandCenter(QMainWindow):
         self._register_plot_theme(
             self.micro_pressure_plot,
             bottom_text="Round",
+            bottom_legend=[
+                ("Spread", (30, 144, 255)),
+            ],
             left_text="Value",
             title_text=self.micro_pressure_title,
         )
 
         self.microstructure_area.nextRow()
 
-        self.micro_activity_plot = self.microstructure_area.addPlot(
+        self.micro_participation_plot = self.microstructure_area.addPlot(
             row=2,
             col=0,
             colspan=2,
-            title=self._format_plot_title(self.micro_activity_title)
+            title=self._format_plot_title(self.micro_participation_title)
         )
-        _style_plot(self.micro_activity_plot)
+        _style_plot(self.micro_participation_plot)
         self._register_plot_theme(
-            self.micro_activity_plot,
+            self.micro_participation_plot,
             bottom_text="Round",
+            bottom_legend=[
+                ("Trades", (220, 20, 60)),
+            ],
             left_text="Value",
-            title_text=self.micro_activity_title,
+            title_text=self.micro_participation_title,
+        )
+
+        self.microstructure_area.nextRow()
+
+        self.micro_volume_plot = self.microstructure_area.addPlot(
+            row=3,
+            col=0,
+            colspan=2,
+            title=self._format_plot_title(self.micro_volume_title)
+        )
+        _style_plot(self.micro_volume_plot)
+        self._register_plot_theme(
+            self.micro_volume_plot,
+            bottom_text="Round",
+            bottom_legend=[
+                ("Volume", (46, 139, 87)),
+            ],
+            left_text="Value",
+            title_text=self.micro_volume_title,
         )
         self.microstructure_area.ci.layout.setColumnStretchFactor(0, 1)
         self.microstructure_area.ci.layout.setColumnStretchFactor(1, 1)
@@ -2928,13 +2257,16 @@ class CommandCenter(QMainWindow):
         self.comparison_status_label.setText("Comparison cleared.")
         self._clear_comparison_plots()
         if self._last_payload is not None:
-            self._populate_sql_tab(self._last_payload.get("sql_objects", {}))
+            self._pending_sql_objects = self._last_payload.get("sql_objects", {})
+        self._mark_tabs_dirty("comparison", "sql")
+        self._refresh_active_tab()
 
     def _apply_sweep_defaults(self, sweep_name):
         defaults = SWEEP_DEFAULTS.get(sweep_name, SWEEP_DEFAULTS["population"])
         self.sweep_total_agents_input.setText(str(defaults["total_agents"]))
         self.sweep_generations_input.setText(str(defaults["n_generations"]))
         self.sweep_rounds_input.setText(str(defaults["n_rounds"]))
+        self.sweep_max_workers_input.setText(str(defaults["max_parallel_workers"]))
         self.sweep_fixed_drift_input.setText(str(defaults["fixed_drift"]))
         self.sweep_fixed_volatility_input.setText(str(defaults["fixed_volatility"]))
         self.sweep_population_values_input.setText(str(defaults["population_values"]))
@@ -2942,11 +2274,15 @@ class CommandCenter(QMainWindow):
         self.sweep_volatility_values_input.setText(str(defaults["volatility_values"]))
 
     def _collect_sweep_settings(self):
+        max_parallel_workers = int(self.sweep_max_workers_input.text().strip())
+        if max_parallel_workers < 1:
+            raise ValueError("Max parallel workers must be at least 1.")
         return {
             "db_path": self.input_db_path.text().strip(),
             "total_agents": int(self.sweep_total_agents_input.text().strip()),
             "n_generations": int(self.sweep_generations_input.text().strip()),
             "n_rounds": int(self.sweep_rounds_input.text().strip()),
+            "max_parallel_workers": max_parallel_workers,
             "fixed_drift": float(self.sweep_fixed_drift_input.text().strip()),
             "fixed_volatility": float(self.sweep_fixed_volatility_input.text().strip()),
             "population_values": self.sweep_population_values_input.text().strip(),
@@ -2982,8 +2318,13 @@ class CommandCenter(QMainWindow):
             "settings": sweep_settings,
             "runs": [],
         }
+        self._clear_sweep_progress_stream()
+        self._append_sweep_progress_line(
+            f"Preparing {sweep_name} sweep • generations={sweep_settings['n_generations']} • rounds={sweep_settings['n_rounds']} | max_workers={sweep_settings['max_parallel_workers']}"
+        )
         self._update_sweep_summary(self._comparison_sweep_payload)
-        self._update_sweep_comparison_plots([])
+        self._mark_tabs_dirty("comparison")
+        self._refresh_active_tab()
         self.btn_run_sweep_comparison.setEnabled(False)
         self.btn_stop_run.setEnabled(True)
         self.sweep_status_label.setText("Launching sweep comparison...")
@@ -3001,7 +2342,10 @@ class CommandCenter(QMainWindow):
             "No sweep comparison loaded. Configure a sweep from the left panel."
         )
         self.sweep_status_label.setText("Sweep comparison cleared.")
+        self._clear_sweep_progress_stream()
         self._clear_sweep_comparison_plots()
+        self._mark_tabs_dirty("comparison")
+        self._refresh_active_tab()
 
     def _handle_sweep_progress(self, payload):
         event = payload.get("event")
@@ -3014,22 +2358,37 @@ class CommandCenter(QMainWindow):
             }
             self._update_sweep_summary(self._comparison_sweep_payload)
             self.sweep_status_label.setText(
-                f"Running {payload['sweep_name']} sweep across {payload['total_runs']} run(s)..."
+                f"Running {payload['sweep_name']} sweep across {payload['total_runs']} run(s) "
+                f"with {payload.get('worker_count', 1)} parallel worker(s)..."
+            )
+            self._append_sweep_progress_line(
+                f"Started {payload['sweep_name']} sweep with {payload['total_runs']} run(s) on {payload.get('worker_count', 1)} worker(s)."
             )
         elif event == "sweep_run_started":
             self.sweep_status_label.setText(
                 f"Running sweep {payload['run_index']} of {payload['total_runs']}: {payload['run_label']}"
+            )
+            self._append_sweep_progress_line(
+                f"[Run {payload['run_index']}/{payload['total_runs']}] {payload['run_label']} started."
             )
         elif event == "generation_started":
             self.sweep_status_label.setText(
                 f"Sweep run {payload['run_index']} of {payload['total_runs']} | "
                 f"{payload['run_label']} generation {payload['generation_id']} of {payload['n_generations']}..."
             )
+            self._append_sweep_progress_line(
+                f"[Run {payload['run_index']}/{payload['total_runs']}] {payload['run_label']} | generation {payload['generation_id']}/{payload['n_generations']} started."
+            )
         elif event == "generation_completed":
             run_index = int(payload["run_index"]) - 1
-            live_df = _prepare_sweep_plot_dataframe(
-                payload.get("live_generation_df", pd.DataFrame()).copy()
-            )
+            live_df = payload.get("live_generation_df", pd.DataFrame())
+            if self._comparison_sweep_payload is None:
+                self._comparison_sweep_payload = {
+                    "sweep_name": payload.get("sweep_name"),
+                    "sweep_title": payload.get("sweep_title"),
+                    "settings": {},
+                    "runs": [],
+                }
             while len(self._comparison_sweep_payload["runs"]) <= run_index:
                 self._comparison_sweep_payload["runs"].append({})
             self._comparison_sweep_payload["runs"][run_index] = {
@@ -3038,40 +2397,56 @@ class CommandCenter(QMainWindow):
                 "data": live_df,
             }
             self._update_sweep_summary(self._comparison_sweep_payload)
-            self._update_sweep_comparison_plots(self._comparison_sweep_payload["runs"])
+            self._mark_tabs_dirty("comparison")
+            self._refresh_active_tab()
             self.sweep_status_label.setText(
                 f"Sweep run {payload['run_index']} of {payload['total_runs']} | "
                 f"{payload['run_label']} completed generation {payload['generation_id']} of {payload['n_generations']}."
             )
+            self._append_sweep_progress_line(
+                f"[Run {payload['run_index']}/{payload['total_runs']}] {payload['run_label']} | generation {payload['generation_id']}/{payload['n_generations']} completed."
+            )
         elif event == "sweep_run_completed":
             run_index = int(payload["run_index"]) - 1
+            if self._comparison_sweep_payload is None:
+                self._comparison_sweep_payload = {
+                    "sweep_name": payload.get("sweep_name"),
+                    "sweep_title": payload.get("sweep_title"),
+                    "settings": {},
+                    "runs": [],
+                }
             while len(self._comparison_sweep_payload["runs"]) <= run_index:
                 self._comparison_sweep_payload["runs"].append({})
             self._comparison_sweep_payload["runs"][run_index] = {
                 "label": payload["run_label"],
                 "experiment_id": payload.get("experiment_id"),
-                "data": _prepare_sweep_plot_dataframe(
-                    payload.get("data", pd.DataFrame()).copy()
-                ),
+                "data": payload.get("data", pd.DataFrame()),
             }
             self._update_sweep_summary(self._comparison_sweep_payload)
-            self._update_sweep_comparison_plots(self._comparison_sweep_payload["runs"])
+            self._mark_tabs_dirty("comparison")
+            self._refresh_active_tab()
             self.sweep_status_label.setText(
                 f"Sweep progress: {payload['completed_runs']}/{payload['total_runs']} completed "
                 f"({payload['run_label']})."
+            )
+            self._append_sweep_progress_line(
+                f"[Run {payload['run_index']}/{payload['total_runs']}] {payload['run_label']} finished | completed runs: {payload['completed_runs']}/{payload['total_runs']}."
             )
 
     def _apply_sweep_comparison_payload(self, payload):
         self._comparison_sweep_payload = payload
         self._update_sweep_summary(payload)
-        self._update_sweep_comparison_plots(payload.get("runs", []))
+        self._mark_tabs_dirty("comparison")
+        self._refresh_active_tab()
         self._save_sweep_comparison_exports(payload.get("sweep_name", "sweep"))
         self.tabs.setCurrentWidget(self.comparison_tab)
         self.sweep_status_label.setText("Sweep comparison finished, saved to DuckDB, and exported to comparison_outputs.")
+        self._append_sweep_progress_line("Sweep comparison finished and saved to DuckDB.")
         self.refresh_data()
 
     def _show_sweep_error(self, message):
         self.sweep_status_label.setText("Sweep comparison failed.")
+        self._append_sweep_progress_line(f"Sweep comparison failed: {message}")
         QMessageBox.critical(self, "Sweep Comparison Error", message)
 
     def _sweep_worker_finished(self):
@@ -3094,7 +2469,6 @@ class CommandCenter(QMainWindow):
         comparison_df = payload.get("comparison_metrics", pd.DataFrame())
         comparison_runs = _comparison_payload_to_runs(experiments_df, comparison_df)
         self._update_comparison_summary(experiments_df, comparison_df)
-        self._update_comparison_plots(comparison_df, experiments_df)
         self._update_sweep_summary(
             {
                 "sweep_title": "Selected Run Comparison",
@@ -3102,8 +2476,14 @@ class CommandCenter(QMainWindow):
                 "settings": {},
             }
         )
-        self._update_sweep_comparison_plots(comparison_runs)
-        self._populate_sql_tab(payload.get("sql_objects", {}))
+        self._comparison_sweep_payload = {
+            "sweep_title": "Selected Run Comparison",
+            "runs": comparison_runs,
+            "settings": {},
+        }
+        self._pending_sql_objects = payload.get("sql_objects", {})
+        self._mark_tabs_dirty("comparison", "sql")
+        self._refresh_active_tab()
         self.tabs.setCurrentWidget(self.comparison_tab)
         self.comparison_status_label.setText("Comparison loaded.")
 
@@ -3121,8 +2501,11 @@ class CommandCenter(QMainWindow):
 
         try:
             mutation_rate = float(self.run_input_mutation.text().strip())
+            db_path = self.input_db_path.text().strip()
+            if not db_path:
+                raise ValueError("Please provide a DuckDB file path before starting a run.")
             config_overrides = {
-                "db_path": self.input_db_path.text().strip(),
+                "db_path": db_path,
                 "experiment_name": self.run_input_name.text().strip(),
                 "experiment_type": self.run_input_type.text().strip(),
                 "run_notes": self.run_input_notes.toPlainText().strip(),
@@ -3182,15 +2565,37 @@ class CommandCenter(QMainWindow):
         event = payload.get("event")
         if event == "generation_started":
             self._current_experiment_id = payload.get("experiment_id")
+            self._current_generation_id = payload.get("generation_id")
+            self._current_round_number = None
+            self._current_run_total_generations = payload.get("n_generations")
+            self._current_run_total_rounds = None
+            self._update_live_progress_label()
             self.run_status_label.setText(
                 f"Running generation {payload['generation_id']} "
                 f"of {payload['n_generations']}..."
             )
             return
 
+        if event == "round_started":
+            self._current_experiment_id = payload.get("experiment_id")
+            self._current_generation_id = payload.get("generation_id")
+            self._current_round_number = payload.get("round_number")
+            self._current_run_total_generations = payload.get("n_generations")
+            self._current_run_total_rounds = payload.get("n_rounds")
+            self._update_live_progress_label()
+            self.run_status_label.setText(
+                f"Running generation {payload['generation_id']} of {payload['n_generations']} | "
+                f"round {payload['round_number']} of {payload['n_rounds']}..."
+            )
+            return
+
         if event == "generation_completed":
             self._current_experiment_id = payload.get("experiment_id")
             self._current_generation_id = payload.get("generation_id")
+            self._current_round_number = payload.get("n_rounds")
+            self._current_run_total_generations = payload.get("n_generations")
+            self._current_run_total_rounds = payload.get("n_rounds")
+            self._update_live_progress_label()
             metrics = payload.get("generation_metrics", {})
             if metrics:
                 self.live_generations_df = pd.concat(
@@ -3202,21 +2607,27 @@ class CommandCenter(QMainWindow):
                     .sort_values("generation_id")
                     .reset_index(drop=True)
                 )
-                self._update_parameter_plot(self.live_generations_df)
-                self._update_wealth_plot_from_generation_metrics(self.live_generations_df)
-                self._update_mean_info_param_plot(self.live_generations_df)
-
-            self._update_market_plot(pd.DataFrame(payload.get("market_summary", [])))
-            self._update_profit_plot(pd.DataFrame(payload.get("strategy_profit_per_round", [])))
-            self._update_volume_share_plot(pd.DataFrame(payload.get("volume_share_per_round", [])))
+            self.live_market_history_df = pd.DataFrame(payload.get("market_history", []))
+            self.live_market_summary_df = pd.DataFrame(payload.get("market_summary", []))
+            self.live_strategy_profit_round_df = pd.DataFrame(payload.get("strategy_profit_per_round", []))
+            self.live_volume_share_round_df = pd.DataFrame(payload.get("volume_share_per_round", []))
+            current_population_df = pd.DataFrame(payload.get("population", []))
+            if not current_population_df.empty:
+                self.live_population_history_df = pd.concat(
+                    [self.live_population_history_df, current_population_df],
+                    ignore_index=True,
+                )
+                self.live_population_history_df = (
+                    self.live_population_history_df
+                    .drop_duplicates(subset=["generation_id", "agent_id"], keep="last")
+                    .sort_values(["generation_id", "agent_id"])
+                    .reset_index(drop=True)
+                )
+            self.live_agent_round_df = pd.DataFrame(payload.get("agent_round", []))
+            self.live_trade_execution_df = pd.DataFrame(payload.get("trade_execution", []))
             round_df = pd.DataFrame(payload.get("strategy_performance_round", []))
             if not round_df.empty:
                 self.live_strategy_round_df = round_df
-                self._update_metric_grid(
-                    self.live_strategy_round_df,
-                    index_col="round_number",
-                    curve_store=self.performance_round_curves,
-                )
 
             generation_df = pd.DataFrame(payload.get("strategy_performance_generation", []))
             if not generation_df.empty:
@@ -3251,11 +2662,21 @@ class CommandCenter(QMainWindow):
                     .sort_values(["generation_id", "strategy_type"])
                     .reset_index(drop=True)
                 )
-                self._update_metric_grid(
-                    self.live_strategy_generation_df,
-                    index_col="generation_id",
-                    curve_store=self.performance_generation_curves,
-                )
+            self._rebuild_live_payload()
+            self._mark_tabs_dirty("dashboard", "strategy", "agent", "microstructure")
+            if self._comparison_payload is not None and str(self._current_experiment_id) in set(self._comparison_selected_ids):
+                live_comparison_df = self._comparison_payload.get("comparison_metrics", pd.DataFrame()).copy()
+                live_current_df = self.live_generations_df.copy()
+                live_current_df["experiment_id"] = str(self._current_experiment_id)
+                if not live_comparison_df.empty:
+                    live_comparison_df = live_comparison_df[
+                        live_comparison_df["experiment_id"].astype(str) != str(self._current_experiment_id)
+                    ]
+                live_comparison_df = pd.concat([live_comparison_df, live_current_df], ignore_index=True)
+                live_comparison_df = live_comparison_df.sort_values(["experiment_id", "generation_id"]).reset_index(drop=True)
+                self._comparison_payload["comparison_metrics"] = live_comparison_df
+                self._mark_tabs_dirty("comparison")
+            self._refresh_active_tab()
 
             self.run_status_label.setText(
                 f"Completed generation {payload['generation_id']} "
@@ -3273,6 +2694,8 @@ class CommandCenter(QMainWindow):
             return
 
         if event == "experiment_completed":
+            self._current_round_number = None
+            self._update_live_progress_label()
             self.run_status_label.setText(
                 f"Experiment {payload['experiment_id']} completed."
             )
@@ -3280,6 +2703,10 @@ class CommandCenter(QMainWindow):
     def _handle_run_completed(self, result):
         self._current_experiment_id = result["experiment_id"]
         self._current_generation_id = None
+        self._current_round_number = None
+        self._current_run_total_generations = None
+        self._current_run_total_rounds = None
+        self._update_live_progress_label()
         self.run_status_label.setText(
             f"Finished experiment {result['experiment_id']}."
         )
@@ -3288,19 +2715,107 @@ class CommandCenter(QMainWindow):
     def stop_run(self):
         if self.run_worker is not None:
             self.run_worker.terminate()
+            self._current_round_number = None
+            self._update_live_progress_label()
             self.run_status_label.setText("Run stopped by user.")
             self.btn_stop_run.setEnabled(False)
             return
         if self.sweep_compare_worker is not None:
             self.sweep_compare_worker.terminate()
             self.sweep_status_label.setText("Sweep comparison stopped by user.")
+            self._append_sweep_progress_line("Sweep comparison stopped by user.")
             self.btn_stop_run.setEnabled(False)
 
     def _handle_run_error(self, message):
+        self._current_round_number = None
+        self._update_live_progress_label()
         self.run_status_label.setText("Run failed.")
         QMessageBox.critical(self, "Run Error", message)
 
+    def _rebuild_live_payload(self):
+        wealth_history_df = pd.DataFrame([
+            {
+                "generation_id": int(row["generation_id"]),
+                "strategy_type": "parameterised_informed",
+                "mean_wealth": row.get("mean_wealth_parameterised_informed"),
+            }
+            for generation_row_index, row in self.live_generations_df.iterrows()
+        ] + [
+            {
+                "generation_id": int(row["generation_id"]),
+                "strategy_type": "zi",
+                "mean_wealth": row.get("mean_wealth_zi"),
+            }
+            for generation_row_index, row in self.live_generations_df.iterrows()
+        ]) if not self.live_generations_df.empty else pd.DataFrame()
+
+        mean_info_param_df = pd.DataFrame([
+            {
+                "generation_id": int(row["generation_id"]),
+                "strategy_type": "parameterised_informed",
+                "mean_info_param": row.get("mean_info_param_parameterised_informed"),
+            }
+            for generation_row_index, row in self.live_generations_df.iterrows()
+        ] + [
+            {
+                "generation_id": int(row["generation_id"]),
+                "strategy_type": "zi",
+                "mean_info_param": row.get("mean_info_param_zi"),
+            }
+            for generation_row_index, row in self.live_generations_df.iterrows()
+        ]) if not self.live_generations_df.empty else pd.DataFrame()
+
+        agent_views = _build_live_agent_views(
+            self.live_population_history_df[
+                self.live_population_history_df["generation_id"] == self._current_generation_id
+            ].copy() if not self.live_population_history_df.empty and self._current_generation_id is not None else pd.DataFrame(),
+            self.live_agent_round_df.copy(),
+            self.live_market_history_df.copy(),
+        )
+        self._live_payload = {
+            "experiments": pd.DataFrame(),
+            "generations": self.live_generations_df.copy(),
+            "wealth_history": wealth_history_df,
+            "mean_info_param": mean_info_param_df,
+            "strategy_generation": self.live_strategy_generation_df.copy(),
+            "market_history": self.live_market_history_df.copy(),
+            "market_summary": self.live_market_summary_df.copy(),
+            "strategy_profit_round": self.live_strategy_profit_round_df.copy(),
+            "volume_share_round": getattr(self, "live_volume_share_round_df", pd.DataFrame()).copy(),
+            "agent_strategy_evolution": _build_live_strategy_evolution_df(self.live_strategy_generation_df),
+            "agent_profit_loss": agent_views["agent_profit_loss"],
+            "agent_fill_rate": agent_views["agent_fill_rate"],
+            "agent_inventory_risk": agent_views["agent_inventory_risk"],
+            "agent_inventory_turnover": agent_views["agent_inventory_turnover"],
+            "agent_relative_performance": agent_views["agent_relative_performance"],
+            "agent_signal_accuracy": agent_views["agent_signal_accuracy"],
+            "agent_volume_share": agent_views["agent_volume_share"],
+            "agent_aggressiveness_spread": agent_views["agent_aggressiveness_spread"],
+            "agent_order_count": pd.DataFrame(),
+            "agent_behavior_change": agent_views["agent_behavior_change"],
+            "agent_execution_price_deviation": agent_views["agent_execution_price_deviation"],
+            "agent_avg_trade_size": agent_views["agent_avg_trade_size"],
+            "agent_info_param_history": self.live_population_history_df[
+                self.live_population_history_df["strategy_type"] == "parameterised_informed"
+            ][["generation_id", "agent_id", "strategy_type", "info_param"]].copy() if not self.live_population_history_df.empty else pd.DataFrame(),
+            "agent_strategy_param_history": self.live_population_history_df[
+                self.live_population_history_df["strategy_type"] == "parameterised_informed"
+            ][["generation_id", "agent_id", "strategy_type", "qty_aggression", "signal_aggression"]].copy() if not self.live_population_history_df.empty else pd.DataFrame(),
+            "sql_objects": self._pending_sql_objects,
+            "population": self.live_population_history_df[
+                self.live_population_history_df["generation_id"] == self._current_generation_id
+            ].copy() if not self.live_population_history_df.empty and self._current_generation_id is not None else pd.DataFrame(),
+            "agent_round": self.live_agent_round_df.copy(),
+            "trade_execution": self.live_trade_execution_df.copy(),
+            "selected_experiment_id": self._current_experiment_id,
+            "selected_generation_id": self._current_generation_id,
+        }
+
     def _reset_live_run_state(self):
+        self._current_generation_id = None
+        self._current_round_number = None
+        self._current_run_total_generations = None
+        self._current_run_total_rounds = None
         self.live_generations_df = pd.DataFrame(
             columns=[
                 "generation_id",
@@ -3316,7 +2831,41 @@ class CommandCenter(QMainWindow):
         )
         self.live_strategy_generation_df = pd.DataFrame()
         self.live_strategy_round_df = pd.DataFrame()
+        self.live_strategy_profit_round_df = pd.DataFrame()
+        self.live_population_history_df = pd.DataFrame()
+        self.live_agent_round_df = pd.DataFrame()
+        self.live_market_history_df = pd.DataFrame()
+        self.live_market_summary_df = pd.DataFrame()
+        self.live_trade_execution_df = pd.DataFrame()
+        self.live_volume_share_round_df = pd.DataFrame()
+        self._live_payload = None
+        self._update_live_progress_label()
         self._clear_round_plots()
+
+    def _update_live_progress_label(self):
+        generation_text = "-"
+        if self._current_generation_id is not None:
+            if self._current_run_total_generations is not None:
+                generation_text = f"{self._current_generation_id} / {self._current_run_total_generations}"
+            else:
+                generation_text = str(self._current_generation_id)
+
+        round_text = "-"
+        if self._current_round_number is not None:
+            if self._current_run_total_rounds is not None:
+                round_text = f"{self._current_round_number} / {self._current_run_total_rounds}"
+            else:
+                round_text = str(self._current_round_number)
+
+        self.live_progress_label.setText(
+            "\n".join(
+                [
+                    "Live run progress:",
+                    f"Generation: {generation_text}",
+                    f"Round: {round_text}",
+                ]
+            )
+        )
 
     def _apply_payload(self, payload):
         self._last_payload = payload
@@ -3325,63 +2874,11 @@ class CommandCenter(QMainWindow):
 
         self._populate_experiment_combo(payload["experiments"])
         self._populate_generation_combo(payload["generations"])
-
-        self._populate_sql_tab(payload.get("sql_objects", {}))
+        self._pending_sql_objects = payload.get("sql_objects", {})
 
         self._update_summary(payload)
-        self._update_parameter_plot(payload["generations"])
-        self._update_wealth_plot(payload["wealth_history"])
-        self._update_mean_info_param_plot(payload["mean_info_param"])
-        self._update_market_plot(payload["market_summary"])
-        self._update_profit_plot(payload["strategy_profit_round"])
-        self._update_volume_share_plot(payload["volume_share_round"])
-        self._update_metric_grid(
-            self._build_strategy_generation_plot_df(
-                payload["strategy_generation"],
-                payload["wealth_history"],
-            ),
-            index_col="generation_id",
-            curve_store=self.performance_generation_curves,
-        )
-        self._update_metric_grid(
-            payload["strategy_profit_round"],
-            index_col="round_number",
-            curve_store=self.performance_round_curves,
-        )
-        self._update_metric_grid(
-            payload["agent_strategy_evolution"],
-            index_col="generation_id",
-            curve_store=self.agent_generation_curves,
-        )
-        self._update_agent_info_param_plot(payload["agent_info_param_history"])
-        self._update_agent_generation_param_plot(
-            payload["agent_strategy_param_history"],
-            "qty_aggression",
-            self.agent_qty_aggression_plot,
-        )
-        self._update_agent_generation_param_plot(
-            payload["agent_strategy_param_history"],
-            "signal_aggression",
-            self.agent_signal_aggression_plot,
-        )
-        self._update_agent_metric_plot(payload["agent_profit_loss"], "profit_loss")
-        self._update_agent_metric_plot(payload["agent_fill_rate"], "fill_rate")
-        self._update_agent_metric_plot(payload["agent_inventory_risk"], "inventory_risk")
-        self._update_agent_metric_plot(payload["agent_inventory_turnover"], "inventory_turnover")
-        self._update_agent_metric_plot(payload["agent_relative_performance"], "relative_profit_loss")
-        self._update_agent_metric_plot(payload["agent_signal_accuracy"], "signal_accuracy")
-        self._update_agent_metric_plot(payload["agent_volume_share"], "volume_share")
-        self._update_agent_metric_plot(payload["agent_avg_trade_size"], "avg_trade_size")
-        self._update_agent_metric_plot(payload["agent_aggressiveness_spread"], "aggressiveness")
-        self._update_agent_metric_plot(payload["agent_aggressiveness_spread"], "market_spread")
-        self._update_agent_metric_plot(payload["agent_behavior_change"], "aggressiveness_change")
-        self._update_agent_metric_plot(payload["agent_behavior_change"], "order_qty_change")
-        self._update_agent_metric_plot(payload["agent_behavior_change"], "inventory_change")
-        self._update_agent_metric_plot(
-            payload["agent_execution_price_deviation"],
-            "execution_price_deviation",
-        )
-        self._update_microstructure_tab(payload)
+        self._mark_tabs_dirty("dashboard", "strategy", "agent", "microstructure", "comparison", "sql")
+        self._refresh_active_tab()
 
         if payload.get("database_created"):
             self.status_label.setText("Created a new DuckDB database and loaded it.")
@@ -3391,7 +2888,7 @@ class CommandCenter(QMainWindow):
     def _populate_experiment_combo(self, experiments_df):
         self._suppress_selection_signals = True
         self.combo_experiment.clear()
-        for _, row in experiments_df.iterrows():
+        for experiment_row_index, row in experiments_df.iterrows():
             self.combo_experiment.addItem(
                 f"{row['experiment_name']} | {row['experiment_id']}",
                 row["experiment_id"],
@@ -3406,7 +2903,7 @@ class CommandCenter(QMainWindow):
     def _populate_comparison_experiment_list(self, experiments_df):
         selected_ids = set(self._comparison_selected_ids)
         self.comparison_experiment_list.clear()
-        for _, row in experiments_df.iterrows():
+        for comparison_row_index, row in experiments_df.iterrows():
             label = f"{row['experiment_name']} | {row['experiment_id']}"
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, str(row["experiment_id"]))
@@ -3442,7 +2939,7 @@ class CommandCenter(QMainWindow):
             table = QTableWidget()
             self._populate_table(table, object_meta["data"])
             object_kind = "View" if object_meta["type"] == "VIEW" else "Table"
-            display_name = object_meta.get("display_name", _humanize_sql_object_name(object_name))
+            display_name = object_meta.get("display_name", humanise_sql_object_name(object_name))
             preview_rows = int(object_meta.get("preview_rows", 0))
             total_rows = int(object_meta.get("row_count", preview_rows))
             if total_rows > preview_rows:
@@ -3459,7 +2956,7 @@ class CommandCenter(QMainWindow):
     def _populate_generation_combo(self, generations_df):
         self._suppress_selection_signals = True
         self.combo_generation.clear()
-        for _, row in generations_df.iterrows():
+        for generation_row_index, row in generations_df.iterrows():
             self.combo_generation.addItem(
                 f"Generation {int(row['generation_id'])} | {row['generation_status']}",
                 int(row["generation_id"]),
@@ -3557,7 +3054,8 @@ class CommandCenter(QMainWindow):
         self.micro_candle_plot.setTitle(self._format_plot_title(self.micro_candle_title))
         self.micro_network_plot.setTitle(self._format_plot_title(self.micro_network_title))
         self.micro_pressure_plot.setTitle(self._format_plot_title(self.micro_pressure_title))
-        self.micro_activity_plot.setTitle(self._format_plot_title(self.micro_activity_title))
+        self.micro_participation_plot.setTitle(self._format_plot_title(self.micro_participation_title))
+        self.micro_volume_plot.setTitle(self._format_plot_title(self.micro_volume_title))
 
         for plot, base_title in self.performance_generation_plots.values():
             plot.setTitle(self._format_plot_title(base_title))
@@ -3601,82 +3099,8 @@ class CommandCenter(QMainWindow):
         return True
 
     def _refresh_plots_only(self):
-        if self._last_payload is None:
-            if self._comparison_payload is not None:
-                self._update_all_plot_titles()
-                self._update_comparison_plots(
-                    self._comparison_payload.get("comparison_metrics", pd.DataFrame()),
-                    self._comparison_payload.get("experiments", pd.DataFrame()),
-                )
-            if self._comparison_sweep_payload is not None:
-                self._update_all_plot_titles()
-                self._update_sweep_comparison_plots(
-                    self._comparison_sweep_payload.get("runs", []),
-                )
-            return
-        self._update_all_plot_titles()
-        self._update_parameter_plot(self._last_payload["generations"])
-        self._update_wealth_plot(self._last_payload["wealth_history"])
-        self._update_mean_info_param_plot(self._last_payload["mean_info_param"])
-        self._update_market_plot(self._last_payload["market_summary"])
-        self._update_profit_plot(self._last_payload["strategy_profit_round"])
-        self._update_volume_share_plot(self._last_payload["volume_share_round"])
-        self._update_metric_grid(
-            self._build_strategy_generation_plot_df(
-                self._last_payload["strategy_generation"],
-                self._last_payload["wealth_history"],
-            ),
-            index_col="generation_id",
-            curve_store=self.performance_generation_curves,
-        )
-        self._update_metric_grid(
-            self._last_payload["strategy_profit_round"],
-            index_col="round_number",
-            curve_store=self.performance_round_curves,
-        )
-        self._update_metric_grid(
-            self._last_payload["agent_strategy_evolution"],
-            index_col="generation_id",
-            curve_store=self.agent_generation_curves,
-        )
-        self._update_agent_info_param_plot(self._last_payload["agent_info_param_history"])
-        self._update_agent_generation_param_plot(
-            self._last_payload["agent_strategy_param_history"],
-            "qty_aggression",
-            self.agent_qty_aggression_plot,
-        )
-        self._update_agent_generation_param_plot(
-            self._last_payload["agent_strategy_param_history"],
-            "signal_aggression",
-            self.agent_signal_aggression_plot,
-        )
-        self._update_agent_metric_plot(self._last_payload["agent_profit_loss"], "profit_loss")
-        self._update_agent_metric_plot(self._last_payload["agent_fill_rate"], "fill_rate")
-        self._update_agent_metric_plot(self._last_payload["agent_inventory_risk"], "inventory_risk")
-        self._update_agent_metric_plot(self._last_payload["agent_inventory_turnover"], "inventory_turnover")
-        self._update_agent_metric_plot(self._last_payload["agent_relative_performance"], "relative_profit_loss")
-        self._update_agent_metric_plot(self._last_payload["agent_signal_accuracy"], "signal_accuracy")
-        self._update_agent_metric_plot(self._last_payload["agent_volume_share"], "volume_share")
-        self._update_agent_metric_plot(self._last_payload["agent_avg_trade_size"], "avg_trade_size")
-        self._update_agent_metric_plot(self._last_payload["agent_aggressiveness_spread"], "aggressiveness")
-        self._update_agent_metric_plot(self._last_payload["agent_aggressiveness_spread"], "market_spread")
-        self._update_agent_metric_plot(self._last_payload["agent_behavior_change"], "aggressiveness_change")
-        self._update_agent_metric_plot(self._last_payload["agent_behavior_change"], "order_qty_change")
-        self._update_agent_metric_plot(self._last_payload["agent_behavior_change"], "inventory_change")
-        self._update_agent_metric_plot(
-            self._last_payload["agent_execution_price_deviation"],
-            "execution_price_deviation",
-        )
-        self._update_microstructure_tab(self._last_payload)
-        if self._comparison_payload is not None:
-            self._update_comparison_plots(
-                self._comparison_payload.get("comparison_metrics", pd.DataFrame()),
-                self._comparison_payload.get("experiments", pd.DataFrame()),
-            )
-        if self._comparison_sweep_payload is not None:
-            self._update_sweep_comparison_plots(
-                self._comparison_sweep_payload.get("runs", []),
-            )
+        self._mark_tabs_dirty("dashboard", "strategy", "agent", "microstructure", "comparison")
+        self._refresh_active_tab(force=True)
 
     def _update_summary(self, payload):
         experiments_df = payload["experiments"]
@@ -3790,10 +3214,7 @@ class CommandCenter(QMainWindow):
             x if self._is_strategy_visible("parameterised_informed") else [],
             self._smooth_series(informed.tolist()) if self._is_strategy_visible("parameterised_informed") else [],
         )
-        self.line_info_param_zi.setData(
-            x if self._is_strategy_visible("zi") else [],
-            self._smooth_series(zi.tolist()) if self._is_strategy_visible("zi") else [],
-        )
+        self.line_info_param_zi.setData([], [])
 
     def _update_market_plot(self, market_summary_df):
         if market_summary_df.empty:
@@ -3910,7 +3331,12 @@ class CommandCenter(QMainWindow):
         if "agent_id" not in df.columns or "strategy_type" not in df.columns:
             return
 
-        for _, agent_df in df.sort_values(["agent_id", "round_number"]).groupby("agent_id"):
+        if metric_key == "aggressiveness":
+            df = df[df["strategy_type"] == "parameterised_informed"].copy()
+            if df.empty:
+                return
+
+        for agent_id, agent_df in df.sort_values(["agent_id", "round_number"]).groupby("agent_id"):
             strategy_type = str(agent_df["strategy_type"].iloc[0])
             if not self._is_strategy_visible(strategy_type):
                 continue
@@ -3951,7 +3377,7 @@ class CommandCenter(QMainWindow):
             return
 
         color = STRATEGY_COLORS["parameterised_informed"]
-        for _, agent_df in filtered_df.groupby("agent_id"):
+        for agent_id, agent_df in filtered_df.groupby("agent_id"):
             plot.plot(
                 x=agent_df["generation_id"].tolist(),
                 y=self._smooth_series(agent_df[value_col].astype(float).tolist()),
@@ -4037,13 +3463,9 @@ class CommandCenter(QMainWindow):
         self.micro_round_slider_label.setText(
             f"Trade network round: {self._microstructure_round} of {self.micro_round_slider.maximum()}"
         )
-        if self._last_payload is not None:
-            market_history_df = self._last_payload.get("market_history", pd.DataFrame())
-            agent_round_df = self._last_payload.get("agent_round", pd.DataFrame())
-            population_df = self._last_payload.get("population", pd.DataFrame())
-            trade_execution_df = self._last_payload.get("trade_execution", pd.DataFrame())
-            trade_link_df = trade_execution_df if not trade_execution_df.empty else _pair_trade_links_from_agent_round(agent_round_df)
-            self._update_trade_network_plot(trade_link_df, population_df, market_history_df)
+        payload = self._current_data_payload()
+        if payload is not None:
+            self._update_microstructure_tab(payload)
 
     def _update_microstructure_summary(self, market_history_df, trade_link_df, using_persisted_links):
         if market_history_df.empty:
@@ -4086,7 +3508,10 @@ class CommandCenter(QMainWindow):
             self.micro_lob_plot.setTitle(self._format_plot_title(self.micro_lob_title))
             return
 
-        snapshot_round = int(agent_round_df["round_number"].max())
+        if self._microstructure_round is not None:
+            snapshot_round = int(self._microstructure_round)
+        else:
+            snapshot_round = int(agent_round_df["round_number"].max())
         round_df = agent_round_df[agent_round_df["round_number"] == snapshot_round].copy()
         round_df = round_df.dropna(subset=["limit_price", "order_qty"])
         if round_df.empty:
@@ -4164,8 +3589,9 @@ class CommandCenter(QMainWindow):
             self.micro_candle_plot.setTitle(self._format_plot_title(self.micro_candle_title))
             return
 
+        selected_round = int(self._microstructure_round) if self._microstructure_round is not None else None
         previous_close = None
-        for _, row in merged_df.iterrows():
+        for merged_row_index, row in merged_df.iterrows():
             round_number = float(row["round_number"])
             close_price = (
                 float(row["p_t"])
@@ -4191,18 +3617,42 @@ class CommandCenter(QMainWindow):
             ]
             high_price = float(max(high_candidates)) if high_candidates else close_price
             low_price = float(min(low_candidates)) if low_candidates else close_price
+            is_selected_round = selected_round is not None and int(round_number) == selected_round
             candle_color = (46, 139, 87) if close_price >= open_price else (220, 20, 60)
+            wick_color = (
+                candle_color[0],
+                candle_color[1],
+                candle_color[2],
+                255 if is_selected_round else 90,
+            )
+            body_color = (
+                candle_color[0],
+                candle_color[1],
+                candle_color[2],
+                255 if is_selected_round else 110,
+            )
             self.micro_candle_plot.plot(
                 x=[round_number, round_number],
                 y=[low_price, high_price],
-                pen=pg.mkPen(candle_color, width=1),
+                pen=pg.mkPen(wick_color, width=2 if is_selected_round else 1),
             )
             self.micro_candle_plot.plot(
                 x=[round_number, round_number],
                 y=[open_price, close_price],
-                pen=pg.mkPen(candle_color, width=6),
+                pen=pg.mkPen(body_color, width=9 if is_selected_round else 5),
             )
             previous_close = close_price
+
+        if selected_round is not None:
+            self.micro_candle_plot.addLine(
+                x=float(selected_round),
+                pen=pg.mkPen(self._theme["plot_reference"], width=1, style=Qt.DashLine),
+            )
+            self.micro_candle_plot.setTitle(
+                self._format_plot_title(f"{self.micro_candle_title} | round {selected_round}")
+            )
+        else:
+            self.micro_candle_plot.setTitle(self._format_plot_title(self.micro_candle_title))
 
     def _update_trade_network_plot(self, trade_link_df, population_df, market_history_df):
         self.micro_network_plot.clear()
@@ -4221,7 +3671,7 @@ class CommandCenter(QMainWindow):
         }
         strategy_by_agent = {
             int(row["agent_id"]): str(row["strategy_type"])
-            for _, row in population_df.iterrows()
+            for population_row_index, row in population_df.iterrows()
         }
 
         snapshot_round = None
@@ -4244,7 +3694,7 @@ class CommandCenter(QMainWindow):
                 .sort_values("notional", ascending=False)
             )
             max_notional = float(edge_df["notional"].max()) if not edge_df.empty else 1.0
-            for _, edge in edge_df.iterrows():
+            for edge_row_index, edge in edge_df.iterrows():
                 buyer = int(edge["buyer_agent_id"])
                 seller = int(edge["seller_agent_id"])
                 buyer_agents.add(buyer)
@@ -4339,18 +3789,6 @@ class CommandCenter(QMainWindow):
             return
 
         x = market_history_df["round_number"].astype(float).tolist()
-        if {"demand_at_p", "supply_at_p"}.issubset(market_history_df.columns):
-            total_flow = market_history_df["demand_at_p"].astype(float) + market_history_df["supply_at_p"].astype(float)
-            imbalance = np.where(
-                total_flow.abs() > 1e-12,
-                (market_history_df["demand_at_p"].astype(float) - market_history_df["supply_at_p"].astype(float)) / total_flow,
-                0.0,
-            )
-            self.micro_pressure_plot.plot(
-                x=x,
-                y=self._smooth_series(imbalance.tolist()),
-                pen=pg.mkPen((255, 140, 0), width=3),
-            )
         if {"best_bid", "best_ask"}.issubset(market_history_df.columns):
             spread = (
                 market_history_df["best_ask"].astype(float) - market_history_df["best_bid"].astype(float)
@@ -4360,32 +3798,55 @@ class CommandCenter(QMainWindow):
                 y=self._smooth_series(spread.tolist()),
                 pen=pg.mkPen((30, 144, 255), width=3),
             )
+        if self._microstructure_round is not None:
+            selected_round = float(self._microstructure_round)
+            self.micro_pressure_plot.addLine(
+                x=selected_round,
+                pen=pg.mkPen(self._theme["plot_reference"], width=1, style=Qt.DashLine),
+            )
+            self.micro_pressure_plot.setTitle(
+                self._format_plot_title(f"{self.micro_pressure_title} | round {int(selected_round)}")
+            )
+        else:
+            self.micro_pressure_plot.setTitle(self._format_plot_title(self.micro_pressure_title))
 
     def _update_market_activity_plot(self, market_history_df):
-        self.micro_activity_plot.clear()
+        self.micro_participation_plot.clear()
+        self.micro_volume_plot.clear()
         if market_history_df.empty:
-            self.micro_activity_plot.setTitle(self._format_plot_title(self.micro_activity_title))
+            self.micro_participation_plot.setTitle(self._format_plot_title(self.micro_participation_title))
+            self.micro_volume_plot.setTitle(self._format_plot_title(self.micro_volume_title))
             return
 
         x = market_history_df["round_number"].astype(float).tolist()
-        if "volume" in market_history_df.columns:
-            self.micro_activity_plot.plot(
-                x=x,
-                y=self._smooth_series(market_history_df["volume"].astype(float).tolist()),
-                pen=pg.mkPen((46, 139, 87), width=3),
-            )
         if "n_trades" in market_history_df.columns:
-            self.micro_activity_plot.plot(
+            self.micro_participation_plot.plot(
                 x=x,
                 y=self._smooth_series(market_history_df["n_trades"].astype(float).tolist()),
                 pen=pg.mkPen((220, 20, 60), width=3),
             )
-        if "n_active_total" in market_history_df.columns:
-            self.micro_activity_plot.plot(
+        if "volume" in market_history_df.columns:
+            self.micro_volume_plot.plot(
                 x=x,
-                y=self._smooth_series(market_history_df["n_active_total"].astype(float).tolist()),
-                pen=pg.mkPen((218, 165, 32), width=3),
+                y=self._smooth_series(market_history_df["volume"].astype(float).tolist()),
+                pen=pg.mkPen((46, 139, 87), width=3),
             )
+        if self._microstructure_round is not None:
+            selected_round = float(self._microstructure_round)
+            for plot, base_title in (
+                (self.micro_participation_plot, self.micro_participation_title),
+                (self.micro_volume_plot, self.micro_volume_title),
+            ):
+                plot.addLine(
+                    x=selected_round,
+                    pen=pg.mkPen(self._theme["plot_reference"], width=1, style=Qt.DashLine),
+                )
+                plot.setTitle(
+                    self._format_plot_title(f"{base_title} | round {int(selected_round)}")
+                )
+        else:
+            self.micro_participation_plot.setTitle(self._format_plot_title(self.micro_participation_title))
+            self.micro_volume_plot.setTitle(self._format_plot_title(self.micro_volume_title))
 
     def _clear_comparison_plots(self):
         for metric_key, plot in self.comparison_param_plots.items():
@@ -4436,7 +3897,7 @@ class CommandCenter(QMainWindow):
         run_count = len(experiments_df)
         labels = [
             f"{row['experiment_name']} ({row['experiment_id']})"
-            for _, row in experiments_df.iterrows()
+            for summary_row_index, row in experiments_df.iterrows()
         ]
         if comparison_df.empty:
             generation_summary = "No generation metrics found for the selected runs."
@@ -4503,7 +3964,7 @@ class CommandCenter(QMainWindow):
 
         labels_by_id = {
             str(row["experiment_id"]): f"{row['experiment_name']} | {str(row['experiment_id'])[:8]}"
-            for _, row in experiments_df.iterrows()
+            for label_row_index, row in experiments_df.iterrows()
         }
         legend_items = []
 
@@ -4529,37 +3990,19 @@ class CommandCenter(QMainWindow):
                     name=None,
                     connect="finite",
                 )
-                self.comparison_param_plots[metric_key].plot(
-                    x=x,
-                    y=self._smooth_series(values),
-                    pen=pg.mkPen(color, width=3),
-                    name=label,
-                    connect="finite",
-                )
+                self.comparison_param_plots[metric_key].plot(x=x, y=self._smooth_series(values), pen=pg.mkPen(color, width=3),name=label, connect="finite",)
 
             wealth_run_df = wealth_df[wealth_df["experiment_id"] == experiment_id].sort_values("generation_id")
-            if WEALTH_INFORMED_COL in wealth_run_df.columns and WEALTH_ZI_COL in wealth_run_df.columns:
+            if WEALTH_INFORMED_COLUMN in wealth_run_df.columns and WEALTH_ZI_COLUMN in wealth_run_df.columns:
                 diff_values = (
-                    wealth_run_df[WEALTH_INFORMED_COL].astype(float)
-                    - wealth_run_df[WEALTH_ZI_COL].astype(float)
+                    wealth_run_df[WEALTH_INFORMED_COLUMN].astype(float)
+                    - wealth_run_df[WEALTH_ZI_COLUMN].astype(float)
                 ).tolist()
                 wealth_x = wealth_run_df["generation_id"].tolist()
                 wealth_plot = self.comparison_wealth_plots[COMPARISON_WEALTH_DIFF_SPEC[0]]
-                wealth_plot.plot(
-                    x=wealth_x,
-                    y=diff_values,
-                    pen=pg.mkPen(transparent_color, width=1),
-                    name=None,
-                    connect="finite",
-                )
-                wealth_plot.plot(
-                    x=wealth_x,
-                    y=self._smooth_series(diff_values),
-                    pen=pg.mkPen(color, width=3),
-                    name=label,
-                    connect="finite",
-                )
-
+                wealth_plot.plot(x=wealth_x,y=diff_values,pen=pg.mkPen(transparent_color, width=1),name=None,connect="finite",)
+                wealth_plot.plot(x=wealth_x,y=self._smooth_series(diff_values),pen=pg.mkPen(color, width=3),name=label, connect="finite",)
+                
         self._comparison_legend_items = legend_items
         labels_html = _format_run_label_html(
             legend_items,
@@ -4644,10 +4087,10 @@ class CommandCenter(QMainWindow):
                 )
 
             wealth_run_df = wealth_runs[run_index].get("data", pd.DataFrame()) if run_index < len(wealth_runs) else pd.DataFrame()
-            if not wealth_run_df.empty and WEALTH_INFORMED_COL in wealth_run_df.columns and WEALTH_ZI_COL in wealth_run_df.columns:
+            if not wealth_run_df.empty and WEALTH_INFORMED_COLUMN in wealth_run_df.columns and WEALTH_ZI_COLUMN in wealth_run_df.columns:
                 diff_values = (
-                    wealth_run_df[WEALTH_INFORMED_COL].astype(float)
-                    - wealth_run_df[WEALTH_ZI_COL].astype(float)
+                    wealth_run_df[WEALTH_INFORMED_COLUMN].astype(float)
+                    - wealth_run_df[WEALTH_ZI_COLUMN].astype(float)
                 ).tolist()
                 wealth_x = wealth_run_df["generation"].astype(int).tolist()
                 wealth_plot = self.sweep_wealth_plots[COMPARISON_WEALTH_DIFF_SPEC[0]]

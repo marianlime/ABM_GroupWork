@@ -1,7 +1,7 @@
 # Run via pytest in terminal
 
 import pytest
-from sim.market import clear_market, allocate_trades
+from Simulation.market import clear_market, allocate_trades
 
 def _side_fills(trades, action):
     """Return {agent_id: quantity} for one side of the trades list."""

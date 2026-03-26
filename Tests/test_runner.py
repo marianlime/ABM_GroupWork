@@ -1,6 +1,6 @@
 import numpy as np
 
-from sim.runner import play_game
+from Simulation.runner import play_game
 
 
 COMMON = dict(

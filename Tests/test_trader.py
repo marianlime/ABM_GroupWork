@@ -1,5 +1,5 @@
 import pytest
-from sim.trader import Trader
+from Simulation.trader import Trader
 
 
 def _is_valid(order):

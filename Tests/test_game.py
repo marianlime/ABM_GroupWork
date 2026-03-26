@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from sim.game import Game, _stable_seed
+from Simulation.game import Game, _stable_seed
 
 
 def _make_game(pop=None, n_rounds=5):
