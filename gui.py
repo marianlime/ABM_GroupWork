@@ -69,6 +69,26 @@ COMPARISON_WEALTH_DIFF_SPEC = ("wealth_difference", "Informed Wealth - ZI Wealth
 PLOT_MATH_NOTES = {"Mean Strategy Parameters Across Generations": "q<sub>g</sub>, s<sub>g</sub>",
     "Mean Wealth by Strategy": "W&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>i</sub>[cash + inv p<sub>T</sub>]",
     "Mean Info_Param by Strategy": "&theta;&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>i</sub>[&theta;<sub>i</sub>]",
+    "Average Wealth per Generation": "W&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>t</sub>[avg<sub>i</sub>(cash<sub>i,t</sub> + inv<sub>i,t</sub> p<sub>t</sub>)]",
+    "Average Profit/Loss per Generation": "&pi;&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>t</sub>[avg<sub>i</sub>(&Delta;W<sub>i,t</sub>)]",
+    "Average Fill Rate per Generation": "f&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>t</sub>[avg<sub>i</sub>(q<sub>exec</sub>/q<sub>order</sub>)]",
+    "Average Aggressiveness per Generation": "a&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>t</sub>[avg<sub>i</sub>(a<sub>i,t</sub>)]",
+    "Average Signal Accuracy per Generation": "e&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>t</sub>[avg<sub>i</sub>(|signal<sub>i,t</sub> - F<sub>t</sub>|)]",
+    "Average Inventory Turnover per Generation": "&tau;&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>t</sub>[avg<sub>i</sub>(|&Delta;inv| / avg(|inv|))]",
+    "Average Execution Price Deviation per Generation": "d&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>t</sub>[avg<sub>i</sub>((p<sub>exec</sub> - p<sub>t</sub>)/|p<sub>t</sub>|)]",
+    "Average Volume Share per Generation": "v&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>t</sub>[avg<sub>i</sub>(q<sub>exec</sub>/V<sub>t</sub>)]",
+    "Average Trade Size per Generation": "q&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>t</sub>[avg<sub>i</sub>(q<sub>exec,i,t</sub>)]",
+    "Average Inventory Risk per Generation": "r&#772;<sub>g</sub><sup>(s)</sup> = avg<sub>t</sub>[avg<sub>i</sub>(|inv<sub>i,t</sub>|)]",
+    "Average Wealth per Round": "W&#772;<sub>t</sub><sup>(s)</sup> = avg<sub>i</sub>(cash<sub>i,t</sub> + inv<sub>i,t</sub> p<sub>t</sub>)",
+    "Average Profit/Loss per Round": "&pi;&#772;<sub>t</sub><sup>(s)</sup> = avg<sub>i</sub>(&Delta;W<sub>i,t</sub>)",
+    "Average Fill Rate per Round": "f&#772;<sub>t</sub><sup>(s)</sup> = avg<sub>i</sub>(q<sub>exec</sub>/q<sub>order</sub>)",
+    "Average Aggressiveness per Round": "a&#772;<sub>t</sub><sup>(s)</sup> = avg<sub>i</sub>(a<sub>i,t</sub>)",
+    "Average Signal Accuracy per Round": "e&#772;<sub>t</sub><sup>(s)</sup> = avg<sub>i</sub>(|signal<sub>i,t</sub> - F<sub>t</sub>|)",
+    "Average Inventory Turnover per Round": "&tau;&#772;<sub>t</sub><sup>(s)</sup> = avg<sub>i</sub>(|&Delta;inv| / avg(|inv|))",
+    "Average Execution Price Deviation per Round": "d&#772;<sub>t</sub><sup>(s)</sup> = avg<sub>i</sub>((p<sub>exec</sub> - p<sub>t</sub>)/|p<sub>t</sub>|)",
+    "Average Volume Share per Round": "v&#772;<sub>t</sub><sup>(s)</sup> = avg<sub>i</sub>(q<sub>exec</sub>/V<sub>t</sub>)",
+    "Average Trade Size per Round": "q&#772;<sub>t</sub><sup>(s)</sup> = avg<sub>i</sub>(q<sub>exec,i,t</sub>)",
+    "Average Inventory Risk per Round": "r&#772;<sub>t</sub><sup>(s)</sup> = avg<sub>i</sub>(|inv<sub>i,t</sub>|)",
     "Market Summary by Round": "bid/ask extrema, F<sub>t</sub>, mid<sub>t</sub>",
     "Average Profit per Round: ZI vs Parameterised": "&pi;&#772;<sub>t</sub><sup>(s)</sup> = avg<sub>i</sub> [&Delta;W<sub>i,t</sub>]",
     "Average Agent Volume Share per Round": "v&#772;<sub>t</sub><sup>(s)</sup> = avg<sub>i</sub>[q<sub>i,t</sub>/V<sub>t</sub>]",
@@ -89,11 +109,45 @@ PLOT_MATH_NOTES = {"Mean Strategy Parameters Across Generations": "q<sub>g</sub>
     "Profit Change vs Prev Gen": "&Delta;&pi;<sub>g</sub><sup>(s)</sup> = &pi;<sub>g</sub><sup>(s)</sup> - &pi;<sub>g-1</sub><sup>(s)</sup>",
     "Info_Param per Agent": "&theta;<sub>i,g</sub>",
     "Qty_Aggression per Agent": "q<sub>i,g</sub>",
-    "Signal_Aggression per Agent": "s<sub>i,g</sub>"}
+    "Signal_Aggression per Agent": "s<sub>i,g</sub>",
+    "Profit/Loss per Round": "&pi;<sub>i,t</sub> = W<sub>i,t</sub> - W<sub>i,t-1</sub>",
+    "Fill Rate per Round": "f<sub>i,t</sub> = q<sub>exec</sub> / q<sub>order</sub>",
+    "Inventory Risk per Round": "r<sub>i,t</sub> = |inv<sub>i,t</sub>|",
+    "Inventory Turnover per Round": "&tau;<sub>i,t</sub> = |&Delta;inv<sub>i,t</sub>| / avg(|inv<sub>i,t-1</sub>|, |inv<sub>i,t</sub>|)",
+    "Relative Performance per Round": "&rho;<sub>i,t</sub> = &pi;<sub>i,t</sub> - avg<sub>j</sub>(&pi;<sub>j,t</sub>)",
+    "Signal Accuracy per Round": "e<sub>i,t</sub> = |signal<sub>i,t</sub> - F<sub>t</sub>|",
+    "Volume Share per Round": "v<sub>i,t</sub> = q<sub>exec,i,t</sub> / V<sub>t</sub>",
+    "Aggressiveness per Round": "a<sub>i,t</sub>",
+    "Market Spread": "spread<sub>t</sub> = |best ask<sub>t</sub> - best bid<sub>t</sub>|",
+    "Aggressiveness Change": "&Delta;a<sub>i,t</sub> = a<sub>i,t</sub> - a<sub>i,t-1</sub>",
+    "Order Qty Change": "&Delta;q<sub>order,i,t</sub> = q<sub>order,i,t</sub> - q<sub>order,i,t-1</sub>",
+    "Inventory Change": "&Delta;inv<sub>i,t</sub> = inv<sub>i,t</sub> - inv<sub>i,t-1</sub>",
+    "Execution Price Deviation per Round": "d<sub>i,t</sub> = (p<sub>exec,i,t</sub> - p<sub>t</sub>)/|p<sub>t</sub>|",
+    "Average Trade Size per Round": "q&#772;<sub>t</sub> = avg(q<sub>exec,i,t</sub>)"}
 PLOT_BRIEF_NOTES = {
     "Mean Strategy Parameters Across Generations": "Shows how the learnt strategy aggressiveness parameters evolve generation by generation.",
     "Mean Wealth by Strategy": "Compares average end-of-generation wealth for informed and zero-intelligence traders.",
     "Mean Info_Param by Strategy": "Tracks the average information parameter carried by each strategy group across generations.",
+    "Average Wealth per Generation": "Shows each strategy's average marked-to-market wealth, averaged across rounds within a generation.",
+    "Average Profit/Loss per Generation": "Shows average per-round profit or loss for each strategy after aggregating over the generation.",
+    "Average Fill Rate per Generation": "Shows how much of submitted order quantity gets executed for each strategy across the generation.",
+    "Average Aggressiveness per Generation": "Shows the average order aggressiveness chosen by each strategy across the generation.",
+    "Average Signal Accuracy per Generation": "Shows how far each strategy's signals are from the fundamental value on average across the generation.",
+    "Average Inventory Turnover per Generation": "Shows how quickly each strategy recycles inventory on average over the generation.",
+    "Average Execution Price Deviation per Generation": "Shows how far execution prices are from the market reference price for each strategy on average over the generation.",
+    "Average Volume Share per Generation": "Shows the share of total traded volume contributed by each strategy, averaged over rounds in the generation.",
+    "Average Trade Size per Generation": "Shows the average executed trade size per strategy across the generation.",
+    "Average Inventory Risk per Generation": "Shows the average absolute inventory held by each strategy across the generation.",
+    "Average Wealth per Round": "Shows each strategy's average marked-to-market wealth round by round.",
+    "Average Profit/Loss per Round": "Shows each strategy's average profit or loss in each round.",
+    "Average Fill Rate per Round": "Shows the fraction of order quantity that gets filled for each strategy in each round.",
+    "Average Aggressiveness per Round": "Shows the average aggressiveness chosen by each strategy in each round.",
+    "Average Signal Accuracy per Round": "Shows how close each strategy's signals are to the fundamental value in each round.",
+    "Average Inventory Turnover per Round": "Shows how quickly inventory changes hands for each strategy in each round.",
+    "Average Execution Price Deviation per Round": "Shows how far execution prices deviate from the market reference price by strategy in each round.",
+    "Average Volume Share per Round": "Shows how much of the round's traded volume is supplied by each strategy.",
+    "Average Trade Size per Round": "Shows the average executed trade size by strategy in each round.",
+    "Average Inventory Risk per Round": "Shows the average absolute inventory exposure by strategy in each round.",
     "Market Summary by Round": "Summarises how bids, asks, the fundamental value, and the mid price move through a generation.",
     "Average Profit per Round: ZI vs Parameterised": "Shows round-by-round average profit to compare trading performance within a generation.",
     "Average Agent Volume Share per Round": "Measures how much of each round's executed volume is supplied by each strategy group.",
@@ -115,6 +169,20 @@ PLOT_BRIEF_NOTES = {
     "Info_Param per Agent": "Tracks each informed agent's information parameter across generations.",
     "Qty_Aggression per Agent": "Tracks each informed agent's quantity aggressiveness across generations.",
     "Signal_Aggression per Agent": "Tracks each informed agent's signal aggressiveness across generations.",
+    "Profit/Loss per Round": "Shows each agent's round-by-round profit or loss.",
+    "Fill Rate per Round": "Shows the share of each agent's submitted quantity that is filled each round.",
+    "Inventory Risk per Round": "Shows the absolute inventory carried by each agent each round.",
+    "Inventory Turnover per Round": "Shows how quickly each agent changes inventory from one round to the next.",
+    "Relative Performance per Round": "Shows each agent's profit or loss relative to the average agent in the same round.",
+    "Signal Accuracy per Round": "Shows how far each agent's signal is from the fundamental value each round.",
+    "Volume Share per Round": "Shows each agent's share of the round's traded volume.",
+    "Aggressiveness per Round": "Shows the aggressiveness level chosen by each agent in each round.",
+    "Market Spread": "Shows the prevailing bid-ask spread faced by each agent in each round.",
+    "Aggressiveness Change": "Shows how each agent's aggressiveness changes from the previous round.",
+    "Order Qty Change": "Shows how each agent's submitted order quantity changes from the previous round.",
+    "Inventory Change": "Shows how each agent's ending inventory changes from the previous round.",
+    "Execution Price Deviation per Round": "Shows how far each agent's execution price is from the market reference price.",
+    "Average Trade Size per Round": "Shows the executed trade size for each agent in each round.",
 }
 
 COMPARISON_LINE_COLORS: list[tuple[int, int, int]] = []
@@ -185,6 +253,10 @@ COMPARISON_LINE_COLORS = _generate_comparison_line_colors(8)
 # Convert generated RGB tuples to hex strings for consistent usage in the GUI.
 COMPARISON_LINE_COLORS = [f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}" for c in COMPARISON_LINE_COLORS]
 
+def _format_smoothing_text(window: int) -> str:
+    points = int(window)
+    return f"{points}-point rolling mean"
+
 def _style_plot(plot):
     plot.showGrid(x=True, y=True, alpha=0.25)
     plot.getAxis("left").enableAutoSIPrefix(False)
@@ -203,11 +275,23 @@ def _resolve_plot_brief_note(base_title: str, bottom_text: str | None = None, le
         return f"Shows how {left_text.lower()} evolves over the selected index."
     return "Shows the plotted series over the selected index."
 
+def _normalise_rgb_color(color) -> tuple[int, int, int]:
+    if isinstance(color, str):
+        hex_value = color.lstrip("#")
+        if len(hex_value) == 6:
+            return tuple(int(hex_value[i:i + 2], 16) for i in (0, 2, 4))
+    if isinstance(color, (tuple, list)) and len(color) >= 3:
+        return tuple(int(color[i]) for i in range(3))
+    return (0, 0, 0)
+
 
 def _set_plot_bottom_label(plot,x_label: str,legend_items=None,text_color: str = GRAPH_FOREGROUND,):
     label_html = f"<span style='color: {text_color};'>{x_label}</span>"
     if legend_items:
-        legend_html = "".join(f"<span style='color: rgb({color[0]}, {color[1]}, {color[2]}); display: inline-block; margin: 0 14px 4px 0; white-space: normal;'>&#9632; {_wrap_label_text_for_html(name)}</span>"for name, color in legend_items)
+        legend_html = "".join(
+            f"<span style='color: rgb({_normalise_rgb_color(color)[0]}, {_normalise_rgb_color(color)[1]}, {_normalise_rgb_color(color)[2]}); display: inline-block; margin: 0 14px 4px 0; white-space: normal;'>&#9632; {_wrap_label_text_for_html(name)}</span>"
+            for name, color in legend_items
+        )
         label_html += ("<br>" f"<span style='font-size: 9pt; display: block;'>{legend_html}</span>")
     plot.setLabel("bottom", label_html)
     plot.getAxis("bottom").setHeight(54 if legend_items else 34)
@@ -230,7 +314,7 @@ def _format_run_label_html(legend_items, text_color: str = GRAPH_FOREGROUND):
     if not legend_items:
         return f"<span style='color: {text_color};'>No runs selected.</span>"
     items_html = "".join(
-        f"<span style='color: rgb({color[0]}, {color[1]}, {color[2]}); display: inline-block; margin: 0 14px 6px 0; white-space: normal;'>&#9632; {_wrap_label_text_for_html(name)}</span>"
+        f"<span style='color: rgb({_normalise_rgb_color(color)[0]}, {_normalise_rgb_color(color)[1]}, {_normalise_rgb_color(color)[2]}); display: inline-block; margin: 0 14px 6px 0; white-space: normal;'>&#9632; {_wrap_label_text_for_html(name)}</span>"
         for name, color in legend_items
     )
     return f"<div style='color: {text_color}; white-space: normal;'>{items_html}</div>"
@@ -1248,7 +1332,9 @@ class CommandCenter(QMainWindow):
         self.smoothing_slider.setValue(1)
         self.smoothing_slider.setTickPosition(QSlider.TicksBelow)
         self.smoothing_slider.setTickInterval(1)
-        self.smoothing_slider_label = QLabel("Graph smoothing: 1 (off)")
+        self.smoothing_slider_label = QLabel(
+            f"Graph smoothing: {_format_smoothing_text(self.smoothing_slider.value())}"
+        )
         self.checkbox_show_parameterised = QCheckBox("Show Parameterised")
         self.checkbox_show_parameterised.setChecked(True)
         self.checkbox_show_zi = QCheckBox("Show ZI")
@@ -1835,7 +1921,7 @@ class CommandCenter(QMainWindow):
 
         self.microstructure_area = pg.GraphicsLayoutWidget()
         self._register_plot_canvas(self.microstructure_area)
-        self.microstructure_area.setMinimumHeight(1800)
+        self.microstructure_area.setMinimumHeight(2400)
         content_layout.addWidget(self.microstructure_area)
         content_layout.addWidget(
             self._create_plot_explanation_label(
@@ -1872,6 +1958,7 @@ class CommandCenter(QMainWindow):
             left_text="Order Qty",
             title_text=self.micro_lob_title,
         )
+        self.microstructure_area.nextRow()
 
         self.micro_candle_plot = self.microstructure_area.addPlot(
             title=self._format_plot_title(self.micro_candle_title)
@@ -1887,7 +1974,6 @@ class CommandCenter(QMainWindow):
             left_text="Price",
             title_text=self.micro_candle_title,
         )
-
         self.microstructure_area.nextRow()
 
         self.micro_network_plot = self.microstructure_area.addPlot(
@@ -1902,6 +1988,7 @@ class CommandCenter(QMainWindow):
         )
         self.micro_network_plot.hideAxis("left")
         self.micro_network_plot.hideAxis("bottom")
+        self.microstructure_area.nextRow()
 
         self.micro_pressure_plot = self.microstructure_area.addPlot(
             title=self._format_plot_title(self.micro_pressure_title)
@@ -1916,13 +2003,9 @@ class CommandCenter(QMainWindow):
             left_text="Value",
             title_text=self.micro_pressure_title,
         )
-
         self.microstructure_area.nextRow()
 
         self.micro_participation_plot = self.microstructure_area.addPlot(
-            row=2,
-            col=0,
-            colspan=2,
             title=self._format_plot_title(self.micro_participation_title)
         )
         _style_plot(self.micro_participation_plot)
@@ -1939,9 +2022,6 @@ class CommandCenter(QMainWindow):
         self.microstructure_area.nextRow()
 
         self.micro_volume_plot = self.microstructure_area.addPlot(
-            row=3,
-            col=0,
-            colspan=2,
             title=self._format_plot_title(self.micro_volume_title)
         )
         _style_plot(self.micro_volume_plot)
@@ -1955,7 +2035,6 @@ class CommandCenter(QMainWindow):
             title_text=self.micro_volume_title,
         )
         self.microstructure_area.ci.layout.setColumnStretchFactor(0, 1)
-        self.microstructure_area.ci.layout.setColumnStretchFactor(1, 1)
 
     def _build_strategy_performance_tab(self):
         layout = QVBoxLayout(self.strategy_performance_tab)
@@ -1971,7 +2050,7 @@ class CommandCenter(QMainWindow):
         generation_layout = QVBoxLayout(generation_group)
         self.performance_generation_area = pg.GraphicsLayoutWidget()
         self._register_plot_canvas(self.performance_generation_area)
-        self.performance_generation_area.setMinimumHeight(1500)
+        self.performance_generation_area.setMinimumHeight(2600)
         generation_layout.addWidget(self.performance_generation_area)
         content_layout.addWidget(generation_group)
 
@@ -1979,7 +2058,7 @@ class CommandCenter(QMainWindow):
         round_layout = QVBoxLayout(round_group)
         self.performance_round_area = pg.GraphicsLayoutWidget()
         self._register_plot_canvas(self.performance_round_area)
-        self.performance_round_area.setMinimumHeight(1500)
+        self.performance_round_area.setMinimumHeight(2600)
         round_layout.addWidget(self.performance_round_area)
         content_layout.addWidget(round_group)
 
@@ -1991,16 +2070,16 @@ class CommandCenter(QMainWindow):
         self.performance_round_curves = {}
 
         generation_metrics = [
-            ("avg_wealth_per_gen", "Average Wealth per Generation"),
-            ("avg_profit_loss_per_gen", "Average Profit/Loss per Generation"),
-            ("avg_fill_rate_per_gen", "Average Fill Rate per Generation"),
-            ("avg_aggressiveness_per_gen", "Average Aggressiveness per Generation"),
-            ("avg_signal_accuracy_per_gen", "Average Signal Accuracy per Generation"),
-            ("avg_inventory_turnover_per_gen", "Average Inventory Turnover per Generation"),
-            ("avg_execution_price_deviation_per_gen", "Average Execution Price Deviation per Generation"),
-            ("avg_volume_share_per_gen", "Average Volume Share per Generation"),
-            ("avg_trade_size_per_gen", "Average Trade Size per Generation"),
-            ("avg_inventory_risk_per_gen", "Average Inventory Risk per Generation"),
+            ("avg_wealth_per_gen", "Average Wealth per Generation", "Average Wealth"),
+            ("avg_profit_loss_per_gen", "Average Profit/Loss per Generation", "Average Profit/Loss"),
+            ("avg_fill_rate_per_gen", "Average Fill Rate per Generation", "Average Fill Rate"),
+            ("avg_aggressiveness_per_gen", "Average Aggressiveness per Generation", "Average Aggressiveness"),
+            ("avg_signal_accuracy_per_gen", "Average Signal Accuracy per Generation", "Average Signal Error"),
+            ("avg_inventory_turnover_per_gen", "Average Inventory Turnover per Generation", "Average Inventory Turnover"),
+            ("avg_execution_price_deviation_per_gen", "Average Execution Price Deviation per Generation", "Average Price Deviation"),
+            ("avg_volume_share_per_gen", "Average Volume Share per Generation", "Average Volume Share"),
+            ("avg_trade_size_per_gen", "Average Trade Size per Generation", "Average Trade Size"),
+            ("avg_inventory_risk_per_gen", "Average Inventory Risk per Generation", "Average Inventory Risk"),
         ]
         self._initialise_metric_grid(
             graph_area=self.performance_generation_area,
@@ -2010,24 +2089,23 @@ class CommandCenter(QMainWindow):
             x_label="Generation",
         )
         self.performance_generation_area.ci.layout.setColumnStretchFactor(0, 1)
-        self.performance_generation_area.ci.layout.setColumnStretchFactor(1, 1)
         generation_layout.addWidget(
             self._create_plot_explanation_label(
-                [title for _, title in generation_metrics]
+                [title for _, title, _ in generation_metrics]
             )
         )
 
         round_metrics = [
-            ("avg_wealth", "Average Wealth per Round"),
-            ("avg_profit_loss", "Average Profit/Loss per Round"),
-            ("avg_fill_rate", "Average Fill Rate per Round"),
-            ("avg_aggressiveness", "Average Aggressiveness per Round"),
-            ("avg_signal_accuracy", "Average Signal Accuracy per Round"),
-            ("avg_inventory_turnover", "Average Inventory Turnover per Round"),
-            ("avg_execution_price_deviation", "Average Execution Price Deviation per Round"),
-            ("avg_volume_share", "Average Volume Share per Round"),
-            ("avg_trade_size", "Average Trade Size per Round"),
-            ("avg_inventory_risk", "Average Inventory Risk per Round"),
+            ("avg_wealth", "Average Wealth per Round", "Average Wealth"),
+            ("avg_profit_loss", "Average Profit/Loss per Round", "Average Profit/Loss"),
+            ("avg_fill_rate", "Average Fill Rate per Round", "Average Fill Rate"),
+            ("avg_aggressiveness", "Average Aggressiveness per Round", "Average Aggressiveness"),
+            ("avg_signal_accuracy", "Average Signal Accuracy per Round", "Average Signal Error"),
+            ("avg_inventory_turnover", "Average Inventory Turnover per Round", "Average Inventory Turnover"),
+            ("avg_execution_price_deviation", "Average Execution Price Deviation per Round", "Average Price Deviation"),
+            ("avg_volume_share", "Average Volume Share per Round", "Average Volume Share"),
+            ("avg_trade_size", "Average Trade Size per Round", "Average Trade Size"),
+            ("avg_inventory_risk", "Average Inventory Risk per Round", "Average Inventory Risk"),
         ]
         self._initialise_metric_grid(
             graph_area=self.performance_round_area,
@@ -2037,10 +2115,9 @@ class CommandCenter(QMainWindow):
             x_label="Round",
         )
         self.performance_round_area.ci.layout.setColumnStretchFactor(0, 1)
-        self.performance_round_area.ci.layout.setColumnStretchFactor(1, 1)
         round_layout.addWidget(
             self._create_plot_explanation_label(
-                [title for _, title in round_metrics]
+                [title for _, title, _ in round_metrics]
             )
         )
 
@@ -2058,7 +2135,7 @@ class CommandCenter(QMainWindow):
         generation_layout = QVBoxLayout(generation_group)
         self.agent_generation_area = pg.GraphicsLayoutWidget()
         self._register_plot_canvas(self.agent_generation_area)
-        self.agent_generation_area.setMinimumHeight(900)
+        self.agent_generation_area.setMinimumHeight(1300)
         generation_layout.addWidget(self.agent_generation_area)
         generation_layout.addWidget(
             self._create_plot_explanation_label(
@@ -2076,7 +2153,7 @@ class CommandCenter(QMainWindow):
         round_layout = QVBoxLayout(round_group)
         self.agent_round_area = pg.GraphicsLayoutWidget()
         self._register_plot_canvas(self.agent_round_area)
-        self.agent_round_area.setMinimumHeight(2100)
+        self.agent_round_area.setMinimumHeight(3600)
         round_layout.addWidget(self.agent_round_area)
         content_layout.addWidget(round_group)
 
@@ -2116,6 +2193,7 @@ class CommandCenter(QMainWindow):
                 name="Parameterised Informed",
             ),
         }
+        self.agent_generation_area.nextRow()
         generation_line_specs = [
             ("agent_info_param_plot", "Info_Param per Agent", "Info_Param"),
             ("agent_qty_aggression_plot", "Qty_Aggression per Agent", "Qty_Aggression"),
@@ -2134,23 +2212,22 @@ class CommandCenter(QMainWindow):
         self.agent_generation_area.nextRow()
         self._initialise_agent_generation_line_grid(generation_line_specs[1:])
         self.agent_generation_area.ci.layout.setColumnStretchFactor(0, 1)
-        self.agent_generation_area.ci.layout.setColumnStretchFactor(1, 1)
 
         round_metrics = [
-            ("profit_loss", "Profit/Loss per Round"),
-            ("fill_rate", "Fill Rate per Round"),
-            ("inventory_risk", "Inventory Risk per Round"),
-            ("inventory_turnover", "Inventory Turnover per Round"),
-            ("relative_profit_loss", "Relative Performance per Round"),
-            ("signal_accuracy", "Signal Accuracy per Round"),
-            ("volume_share", "Volume Share per Round"),
-            ("avg_trade_size", "Avg Trade Size per Round"),
-            ("aggressiveness", "Aggressiveness vs Spread"),
-            ("market_spread", "Market Spread"),
-            ("aggressiveness_change", "Aggressiveness Change"),
-            ("order_qty_change", "Order Qty Change"),
-            ("inventory_change", "Inventory Change"),
-            ("execution_price_deviation", "Execution Price Deviation per Round"),
+            ("profit_loss", "Profit/Loss per Round", "Profit/Loss"),
+            ("fill_rate", "Fill Rate per Round", "Fill Rate"),
+            ("inventory_risk", "Inventory Risk per Round", "Inventory Risk"),
+            ("inventory_turnover", "Inventory Turnover per Round", "Inventory Turnover"),
+            ("relative_profit_loss", "Relative Performance per Round", "Relative Profit/Loss"),
+            ("signal_accuracy", "Signal Accuracy per Round", "Signal Error"),
+            ("volume_share", "Volume Share per Round", "Volume Share"),
+            ("avg_trade_size", "Average Trade Size per Round", "Trade Size"),
+            ("aggressiveness", "Aggressiveness per Round", "Aggressiveness"),
+            ("market_spread", "Market Spread", "Spread"),
+            ("aggressiveness_change", "Aggressiveness Change", "Change in Aggressiveness"),
+            ("order_qty_change", "Order Qty Change", "Change in Order Qty"),
+            ("inventory_change", "Inventory Change", "Change in Inventory"),
+            ("execution_price_deviation", "Execution Price Deviation per Round", "Price Deviation"),
         ]
         self._initialise_agent_metric_grid(
             metric_specs=round_metrics,
@@ -2158,15 +2235,19 @@ class CommandCenter(QMainWindow):
             x_label="Round",
         )
         self.agent_round_area.ci.layout.setColumnStretchFactor(0, 1)
-        self.agent_round_area.ci.layout.setColumnStretchFactor(1, 1)
         round_layout.addWidget(
             self._create_plot_explanation_label(
-                [title for _, title in round_metrics]
+                [title for _, title, _ in round_metrics]
             )
         )
 
     def _initialise_metric_grid(self, graph_area, metric_specs, curve_store, x_label, plot_store=None):
-        for idx, (metric_key, title) in enumerate(metric_specs):
+        for idx, metric_spec in enumerate(metric_specs):
+            if len(metric_spec) == 3:
+                metric_key, title, y_label = metric_spec
+            else:
+                metric_key, title = metric_spec
+                y_label = "Value"
             plot = graph_area.addPlot(title=self._format_plot_title(title))
             _style_plot(plot)
             self._register_plot_theme(
@@ -2176,7 +2257,7 @@ class CommandCenter(QMainWindow):
                     ("ZI", STRATEGY_COLORS["zi"]),
                     ("Parameterised Informed", STRATEGY_COLORS["parameterised_informed"]),
                 ],
-                left_text="Value",
+                left_text=y_label,
                 title_text=title,
             )
             if plot_store is not None:
@@ -2191,19 +2272,22 @@ class CommandCenter(QMainWindow):
                     name="Parameterised Informed",
                 ),
             }
-            if idx % 2 == 1:
-                graph_area.nextRow()
+            graph_area.nextRow()
 
     def _initialise_agent_metric_grid(self, metric_specs, plot_store, x_label):
-        for idx, (metric_key, title) in enumerate(metric_specs):
+        for idx, metric_spec in enumerate(metric_specs):
+            if len(metric_spec) == 3:
+                metric_key, title, y_label = metric_spec
+            else:
+                metric_key, title = metric_spec
+                y_label = "Value"
             plot = self.agent_round_area.addPlot(
                 title=self._format_plot_title(title)
             )
             _style_plot(plot)
-            self._register_plot_theme(plot, bottom_text=x_label, left_text="Value", title_text=title)
+            self._register_plot_theme(plot, bottom_text=x_label, left_text=y_label, title_text=title)
             plot_store[metric_key] = (plot, title)
-            if idx % 2 == 1:
-                self.agent_round_area.nextRow()
+            self.agent_round_area.nextRow()
 
     def _initialise_agent_generation_line_grid(self, plot_specs):
         for idx, (attr_name, title, y_label) in enumerate(plot_specs):
@@ -2211,8 +2295,7 @@ class CommandCenter(QMainWindow):
             _style_plot(plot)
             self._register_plot_theme(plot, bottom_text="Generation", left_text=y_label, title_text=title)
             setattr(self, attr_name, plot)
-            if idx % 2 == 1:
-                self.agent_generation_area.nextRow()
+            self.agent_generation_area.nextRow()
 
     def refresh_data(self):
         db_path = self.input_db_path.text().strip()
@@ -2452,12 +2535,21 @@ class CommandCenter(QMainWindow):
             )
 
     def _apply_sweep_comparison_payload(self, payload):
-        self._comparison_sweep_payload = payload
-        self._update_sweep_summary(payload)
-        self._mark_tabs_dirty("comparison")
-        self._refresh_active_tab()
-        self._save_sweep_comparison_exports(payload.get("sweep_name", "sweep"))
         self.tabs.setCurrentWidget(self.comparison_tab)
+        normalised_runs = []
+        for run in payload.get("runs", []):
+            if not run:
+                normalised_runs.append(run)
+                continue
+            run_df = prepare_sweep_plot_dataframe(run.get("data", pd.DataFrame()))
+            normalised_runs.append(dict(run, data=run_df))
+
+        self._comparison_sweep_payload = dict(payload, runs=normalised_runs)
+        self._update_sweep_summary(self._comparison_sweep_payload)
+        self._update_sweep_comparison_plots(normalised_runs)
+        self._mark_tabs_dirty("comparison")
+        self._refresh_active_tab(force=True)
+        self._save_sweep_comparison_exports(payload.get("sweep_name", "sweep"))
         graphs_only = bool(payload.get("settings", {}).get("graphs_only", False))
         if graphs_only:
             self.sweep_status_label.setText("Sweep comparison finished in graphs-only mode and exported to comparison_outputs.")
@@ -3112,12 +3204,9 @@ class CommandCenter(QMainWindow):
 
     def _on_smoothing_changed(self, value):
         self._pending_smoothing_window = int(value)
-        if self._pending_smoothing_window <= 1:
-            self.smoothing_slider_label.setText("Graph smoothing: 1 (off)")
-        else:
-            self.smoothing_slider_label.setText(
-                f"Graph smoothing: {self._pending_smoothing_window}-point rolling mean"
-            )
+        self.smoothing_slider_label.setText(
+            f"Graph smoothing: {_format_smoothing_text(self._pending_smoothing_window)}"
+        )
         self._smoothing_slider_timer.start()
 
     def _apply_debounced_smoothing_change(self):
@@ -3128,7 +3217,7 @@ class CommandCenter(QMainWindow):
         math_note = _resolve_plot_math_note(base_title)
         return (
             f"<span style='color: {self._theme['plot_foreground']};'>"
-            f"{base_title} | {math_note} | smoothing {self.smoothing_window}"
+            f"{base_title} | {math_note} | {_format_smoothing_text(self.smoothing_window)}"
             f"</span>"
         )
 

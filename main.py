@@ -222,8 +222,7 @@ def _build_strategy_performance_round_records(game):
 
     df = pd.DataFrame(rows)
     grouped = (
-        df.groupby(["round_number", "strategy_type"], as_index=False)
-        .agg(
+        df.groupby(["round_number", "strategy_type"], as_index=False).agg(
             num_agents=("strategy_type", "size"),
             avg_wealth=("wealth", "mean"),
             avg_profit_loss=("profit_loss", "mean"),
@@ -248,8 +247,7 @@ def _build_strategy_performance_generation_records(round_records, generation_id)
 
     df = pd.DataFrame(round_records)
     grouped = (
-        df.groupby("strategy_type", as_index=False)
-        .agg(
+        df.groupby("strategy_type", as_index=False).agg(
             total_agent_rounds=("num_agents", "sum"),
             avg_profit_loss_per_gen=("avg_profit_loss", "mean"),
             avg_fill_rate_per_gen=("avg_fill_rate", "mean"),
@@ -509,12 +507,7 @@ def run_experiment(config_overrides=None, progress_callback=None, run_analysis=T
             "n_generations": int(config["n_generations"]),
         })
 
-    return {
-        "experiment_id": experiment_id,
-        "generation_counts_df": generation_counts_df,
-        "results_df": results_df,
-        "config": config,
-    }
+    return {"experiment_id": experiment_id, "generation_counts_df": generation_counts_df, "results_df": results_df, "config": config,}
 
 
 if __name__ == "__main__":
