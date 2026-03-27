@@ -1,62 +1,89 @@
 ABM Calibration Summary
-Generated: 2026-03-25 16:23:14
+Generated: 2026-03-26 22:38:57
 Generations per config: 10  |  Rounds: 25
+
+STYLISED FACT BENCHMARKS
+  1. Wealth premium > 0%            [Gode & Sunder 1993]
+  2. No-clear rate < 10%            [basic liquidity]
+  3. Return kurtosis > 25.0           [Cont 2001]
+  4. |AC(1) of returns| < 0.15     [Cont 2001]
 
 OPTION 2: Noise Trader Proportion
 Literature: Kyle (1985), Glosten & Milgrom (1985)
 Target: 60-70% noise traders; baseline = 65%
 
- n_informed  n_zi  pct_noise  wealth_premium_pct  no_clear_rate  mean_volume  premium_positive  BASELINE
-         10    90         90               58.91            0.0       0.7803              True     False
-         25    75         75               55.16            0.0       0.8136              True     False
-         35    65         65               51.19            0.0       0.7887              True      True
-         50    50         50               47.03            0.0       0.7019              True     False
-         65    35         35               41.78            0.0       0.6190              True     False
+ n_informed  n_zi  pct_noise  wealth_premium_pct  no_clear_rate  mean_volume  kurtosis  autocorr_1  premium_positive  BASELINE
+         10    90         90               59.50            0.0       0.7993     22.69     -0.0768              True     False
+         25    75         75               47.31            0.0       0.8536     24.99     -0.0007              True     False
+         35    65         65               50.53            0.0       0.8002     24.83     -0.0062              True      True
+         50    50         50               53.16            0.0       0.6236     24.61      0.0209              True     False
+         65    35         35               39.50            0.0       0.6029     27.05      0.0474              True     False
 
 OPTION 3: Grid Search
-Criteria: wealth_premium > 0%, no_clear_rate < 10%
+Criteria: premium > 0%, ncr < 10%, kurtosis > 25.0, |AC(1)| < 0.15
 
- n_zi  n_informed  ip_high  wealth_premium_pct  no_clear_rate  mean_volume  premium_ok  ncr_ok  VALID  BASELINE
-   35          65     0.50               39.54            0.0       0.6197        True    True   True     False
-   35          65     0.75               51.55            0.0       0.6478        True    True   True     False
-   35          65     1.00               45.31            0.0       0.5125        True    True   True     False
-   35          65     1.50               48.15            0.0       0.5786        True    True   True     False
-   35          65     2.00               46.55            0.0       0.5423        True    True   True     False
-   50          50     0.50               50.61            0.0       0.7566        True    True   True     False
-   50          50     0.75               50.90            0.0       0.6673        True    True   True     False
-   50          50     1.00               51.37            0.0       0.6915        True    True   True     False
-   50          50     1.50               53.73            0.0       0.6713        True    True   True     False
-   50          50     2.00               49.19            0.0       0.6647        True    True   True     False
-   65          35     0.50               45.47            0.0       0.8366        True    True   True     False
-   65          35     0.75               42.29            0.0       0.9570        True    True   True     False
-   65          35     1.00               43.71            0.0       0.8180        True    True   True     False
-   65          35     1.50               42.78            0.0       0.9026        True    True   True     False
-   65          35     2.00               44.10            0.0       0.8898        True    True   True      True
-   80          20     0.50               57.36            0.0       0.8274        True    True   True     False
-   80          20     0.75               57.68            0.0       0.8345        True    True   True     False
-   80          20     1.00               49.59            0.0       0.8691        True    True   True     False
-   80          20     1.50               54.14            0.0       0.7721        True    True   True     False
-   80          20     2.00               59.14            0.0       0.8074        True    True   True     False
+ n_zi  n_informed  ip_high  wealth_premium_pct  no_clear_rate  mean_volume  kurtosis  autocorr_1  premium_ok  ncr_ok  kurtosis_ok  autocorr_ok  VALID  BASELINE
+   35          65     0.50               44.08            0.0       0.5834     25.88      0.0654        True    True         True         True   True     False
+   35          65     0.75               40.57            0.0       0.5885     27.04      0.0199        True    True         True         True   True     False
+   35          65     1.00               35.40            0.0       0.6387     26.82      0.0492        True    True         True         True   True     False
+   35          65     1.50               42.64            0.0       0.6838     27.42      0.0127        True    True         True         True   True     False
+   35          65     2.00               37.73            0.0       0.7533     27.67      0.0442        True    True         True         True   True     False
+   50          50     0.50               49.43            0.0       0.6670     26.09      0.0188        True    True         True         True   True     False
+   50          50     0.75               46.13            0.0       0.8020     27.09      0.0267        True    True         True         True   True     False
+   50          50     1.00               47.97            0.0       0.6676     26.18      0.0190        True    True         True         True   True     False
+   50          50     1.50               46.46            0.0       0.5985     24.60      0.0140        True    True        False         True  False     False
+   50          50     2.00               42.94            0.0       0.6828     24.72      0.0294        True    True        False         True  False     False
+   65          35     0.50               52.70            0.0       0.8057     25.52      0.0129        True    True         True         True   True     False
+   65          35     0.75               50.83            0.0       0.8175     24.92      0.0217        True    True        False         True  False     False
+   65          35     1.00               36.03            0.0       0.9129     25.69      0.0066        True    True         True         True   True     False
+   65          35     1.50               43.96            0.0       0.8038     25.85      0.0201        True    True         True         True   True     False
+   65          35     2.00               47.41            0.0       0.7731     25.23     -0.0043        True    True         True         True   True      True
+   80          20     0.50               63.32            0.0       0.8118     23.81     -0.0093        True    True        False         True  False     False
+   80          20     0.75               53.62            0.0       0.8232     24.01     -0.0005        True    True        False         True  False     False
+   80          20     1.00               51.15            0.0       0.8253     24.11      0.0139        True    True        False         True  False     False
+   80          20     1.50               54.99            0.0       0.8047     23.97      0.0267        True    True        False         True  False     False
+   80          20     2.00               52.14            0.0       0.8167     22.96      0.0064        True    True        False         True  False     False
 
-Valid configurations (20):
- n_zi  ip_high  wealth_premium_pct  no_clear_rate  BASELINE
-   35     0.50               39.54            0.0     False
-   35     0.75               51.55            0.0     False
-   35     1.00               45.31            0.0     False
-   35     1.50               48.15            0.0     False
-   35     2.00               46.55            0.0     False
-   50     0.50               50.61            0.0     False
-   50     0.75               50.90            0.0     False
-   50     1.00               51.37            0.0     False
-   50     1.50               53.73            0.0     False
-   50     2.00               49.19            0.0     False
-   65     0.50               45.47            0.0     False
-   65     0.75               42.29            0.0     False
-   65     1.00               43.71            0.0     False
-   65     1.50               42.78            0.0     False
-   65     2.00               44.10            0.0      True
-   80     0.50               57.36            0.0     False
-   80     0.75               57.68            0.0     False
-   80     1.00               49.59            0.0     False
-   80     1.50               54.14            0.0     False
-   80     2.00               59.14            0.0     False
+Valid configurations: 12 of 20
+Invalid configurations: 8 of 20
+
+Valid region:
+ n_zi  ip_high  wealth_premium_pct  no_clear_rate  kurtosis  autocorr_1  BASELINE
+   35     0.50               44.08            0.0     25.88      0.0654     False
+   35     0.75               40.57            0.0     27.04      0.0199     False
+   35     1.00               35.40            0.0     26.82      0.0492     False
+   35     1.50               42.64            0.0     27.42      0.0127     False
+   35     2.00               37.73            0.0     27.67      0.0442     False
+   50     0.50               49.43            0.0     26.09      0.0188     False
+   50     0.75               46.13            0.0     27.09      0.0267     False
+   50     1.00               47.97            0.0     26.18      0.0190     False
+   65     0.50               52.70            0.0     25.52      0.0129     False
+   65     1.00               36.03            0.0     25.69      0.0066     False
+   65     1.50               43.96            0.0     25.85      0.0201     False
+   65     2.00               47.41            0.0     25.23     -0.0043      True
+
+Invalid configurations:
+ n_zi  ip_high  wealth_premium_pct  no_clear_rate  kurtosis  autocorr_1  premium_ok  ncr_ok  kurtosis_ok  autocorr_ok
+   50     1.50               46.46            0.0     24.60      0.0140        True    True        False         True
+   50     2.00               42.94            0.0     24.72      0.0294        True    True        False         True
+   65     0.75               50.83            0.0     24.92      0.0217        True    True        False         True
+   80     0.50               63.32            0.0     23.81     -0.0093        True    True        False         True
+   80     0.75               53.62            0.0     24.01     -0.0005        True    True        False         True
+   80     1.00               51.15            0.0     24.11      0.0139        True    True        False         True
+   80     1.50               54.99            0.0     23.97      0.0267        True    True        False         True
+   80     2.00               52.14            0.0     22.96      0.0064        True    True        False         True
+
+Failure breakdown (configs failing each criterion):
+  Premium ≤ 0%:            0 configs
+  No-clear rate ≥ 10%:     0 configs
+  Kurtosis ≤ 25.0:      8 configs
+  |AC(1)| ≥ 0.15:        0 configs
+  (sole failing criterion: kurtosis — premium, no-clear rate, and autocorr all pass universally)
+
+
+Kurtosis heatmap (rows = n_zi, cols = ip_high; ✓ = kurtosis > threshold):
+  n_zi \ ip_high  0.50  0.75  1.00  1.50  2.00
+              35    25.88✓  27.04✓  26.82✓  27.42✓  27.67✓
+              50    26.09✓  27.09✓  26.18✓  24.60✗  24.72✗
+              65    25.52✓  24.92✗  25.69✓  25.85✓  25.23✓
+              80    23.81✗  24.01✗  24.11✗  23.97✗  22.96✗

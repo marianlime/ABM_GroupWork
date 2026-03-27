@@ -1,6 +1,6 @@
 """
-Evolutionary algorithms (truncation, tournament, fitness-proportionate) and
-population-management helpers for the agent-based market simulation.
+Evolutionary algorithms (truncation) and population-management helpers
+for the agent-based market simulation.
 """
 
 #--- Imports for evolution.py ---
@@ -150,72 +150,6 @@ def evolve_truncation(final_score, agents, top_n: int, bottom_k: int, param_boun
     return list(survivors) + children
 
 
-def evolve_tournament(final_score, agents, bottom_k: int, tournament_size: int, param_bounds: dict, default_strategy_params: dict, rng: random.Random | None = None, mutation_rate: float = 0.02, info_param_mutation_std: float = 0.01, info_param_bounds: tuple[float, float] = (0.0, 1.0), frozen_params: set = frozenset(), crossover_rate: float = 0.0) -> list[dict]:
-    
-    if rng is None:
-        rng = random.Random()
-
-    ranked = rank_agents_by_fitness(final_score, agents)
-    population_size = len(ranked)
-
-    if population_size == 0:
-        raise ValueError("Cannot evolve an empty population")
-    if not (0 <= bottom_k <= population_size):
-        raise ValueError(f"bottom_k must be between 0 and {population_size}, got {bottom_k}")
-    if not (1 <= tournament_size <= population_size):
-        raise ValueError(f"tournament_size must be between 1 and {population_size}, got {tournament_size}")
-
-    survivors = ranked[: population_size - bottom_k]
-
-    kwargs = dict(rng=rng, mutation_rate=mutation_rate,
-                  info_param_mutation_std=info_param_mutation_std,
-                  info_param_bounds=info_param_bounds,
-                  param_bounds=param_bounds,
-                  default_strategy_params=default_strategy_params,
-                  frozen_params=frozen_params)
-
-    children = []
-    for _ in range(bottom_k):
-        primary = max(rng.sample(ranked, k=tournament_size), key=lambda x: x["wealth"])
-        second  = None
-        if crossover_rate > 0 and rng.random() < crossover_rate and population_size > 1:
-            second = max(rng.sample(ranked, k=tournament_size), key=lambda x: x["wealth"])
-        children.append(_make_child(primary, second_parent=second, **kwargs))
-
-    return list(survivors) + children
-
-
-def evolve_fitness_proportionate(final_score, agents, bottom_k: int, param_bounds: dict, default_strategy_params: dict, rng: random.Random | None = None, epsilon: float = 1e-9, mutation_rate: float = 0.02, info_param_mutation_std: float = 0.01, info_param_bounds: tuple[float, float] = (0.0, 1.0), frozen_params: set = frozenset(), crossover_rate: float = 0.0) -> list[dict]:
-    
-    if rng is None:
-        rng = random.Random()
-
-    ranked = rank_agents_by_fitness(final_score, agents)
-    population_size = len(ranked)
-
-    if population_size == 0:
-        raise ValueError("Cannot evolve an empty population")
-    if not (0 <= bottom_k <= population_size):
-        raise ValueError(f"bottom_k must be between 0 and {population_size}, got {bottom_k}")
-
-    survivors = ranked[: population_size - bottom_k]
-
-    min_wealth = min(a["wealth"] for a in ranked)
-    weights = [(a["wealth"] - min_wealth + epsilon) for a in ranked]
-    if sum(weights) <= 0:
-        raise ValueError("Adjusted fitness weights must sum to a positive value")
-
-    kwargs = dict(rng=rng, mutation_rate=mutation_rate,info_param_mutation_std=info_param_mutation_std,info_param_bounds=info_param_bounds,param_bounds=param_bounds,default_strategy_params=default_strategy_params, frozen_params=frozen_params)
-    children = []
-
-    for _ in range(bottom_k):
-        primary = rng.choices(ranked, weights=weights, k=1)[0]
-        second  = None
-        if crossover_rate > 0 and rng.random() < crossover_rate and population_size > 1:
-            second = rng.choices(ranked, weights=weights, k=1)[0]
-        children.append(_make_child(primary, second_parent=second, **kwargs))
-    return list(survivors) + children
-
 
 def evolve_population(algorithm_name: str, final_score, agents, algorithm_params: dict, rng: random.Random | None = None) -> list[dict]:
 
@@ -251,11 +185,7 @@ def evolve_population(algorithm_name: str, final_score, agents, algorithm_params
 
     if algorithm_name == "truncation":
         return evolve_truncation(final_score=final_score, agents=agents, top_n=top_n, bottom_k=bottom_k, rng=rng, **mutation_kwargs)
-    if algorithm_name == "tournament":
-        return evolve_tournament(final_score=final_score, agents=agents, bottom_k=bottom_k, tournament_size=algorithm_params["tournament_size"], rng=rng, **mutation_kwargs)
-    if algorithm_name == "fitness_proportionate":
-        return evolve_fitness_proportionate(final_score=final_score, agents=agents, bottom_k=bottom_k, rng=rng, epsilon=algorithm_params.get("epsilon", 1e-9), **mutation_kwargs)
-    
+
     raise ValueError(f"Unknown algorithm_name: {algorithm_name}")
 
 
